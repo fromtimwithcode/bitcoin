@@ -7,9 +7,15 @@
 export LC_ALL=C
 
 if [ "$TRAVIS_EVENT_TYPE" = "pull_request" ]; then
-  test/lint/commit-script-check.sh $TRAVIS_COMMIT_RANGE
+  # TRAVIS_BRANCH will be present in a Travis environment. For builds triggered
+  # by a pull request this is the name of the branch targeted by the pull request.
+  # https://docs.travis-ci.com/user/environment-variables/
+  COMMIT_RANGE="$TRAVIS_BRANCH..HEAD"
+  test/lint/commit-script-check.sh $COMMIT_RANGE
 fi
 
+# This only checks that the trees are pure subtrees, it is not doing a full
+# check with -r to not have to fetch all the remotes.
 test/lint/git-subtree-check.sh src/crypto/ctaes
 test/lint/git-subtree-check.sh src/secp256k1
 test/lint/git-subtree-check.sh src/univalue

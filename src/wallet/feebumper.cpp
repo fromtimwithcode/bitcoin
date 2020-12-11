@@ -111,7 +111,7 @@ static feebumper::Result CheckFeeRate(const CWallet& wallet, const CWalletTx& wt
     return feebumper::Result::OK;
 }
 
-static CFeeRate EstimateFeeRate(const CWallet& wallet, const CWalletTx& wtx, const CAmount old_fee, CCoinControl& coin_control)
+static CFeeRate EstimateFeeRate(const CWallet& wallet, const CWalletTx& wtx, const CAmount old_fee, const CCoinControl& coin_control)
 {
     // Get the fee rate of the original transaction. This is calculated from
     // the tx fee/vsize, so it may have been rounded down. Add 1 satoshi to the
@@ -219,7 +219,8 @@ Result CreateRateBumpTransaction(CWallet& wallet, const uint256& txid, const CCo
     CAmount fee_ret;
     int change_pos_in_out = -1; // No requested location for change
     bilingual_str fail_reason;
-    if (!wallet.CreateTransaction(recipients, tx_new, fee_ret, change_pos_in_out, fail_reason, new_coin_control, false)) {
+    FeeCalculation fee_calc_out;
+    if (!wallet.CreateTransaction(recipients, tx_new, fee_ret, change_pos_in_out, fail_reason, new_coin_control, fee_calc_out, false)) {
         errors.push_back(Untranslated("Unable to create transaction.") + Untranslated(" ") + fail_reason);
         return Result::WALLET_ERROR;
     }

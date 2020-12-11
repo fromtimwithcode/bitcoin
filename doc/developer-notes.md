@@ -276,6 +276,33 @@ configure option adds `-DDEBUG_LOCKORDER` to the compiler flags. This inserts
 run-time checks to keep track of which locks are held and adds warnings to the
 `debug.log` file if inconsistencies are detected.
 
+### Assertions and Checks
+
+The util file `src/util/check.h` offers helpers to protect against coding and
+internal logic bugs. They must never be used to validate user, network or any
+other input.
+
+* `assert` or `Assert` should be used to document assumptions when any
+  violation would mean that it is not safe to continue program execution. The
+  code is always compiled with assertions enabled.
+   - For example, a nullptr dereference or any other logic bug in validation
+     code means the program code is faulty and must terminate immediately.
+* `CHECK_NONFATAL` should be used for recoverable internal logic bugs. On
+  failure, it will throw an exception, which can be caught to recover from the
+  error.
+   - For example, a nullptr dereference or any other logic bug in RPC code
+     means that the RPC code is faulty and can not be executed. However, the
+     logic bug can be shown to the user and the program can continue to run.
+* `Assume` should be used to document assumptions when program execution can
+  safely continue even if the assumption is violated. In debug builds it
+  behaves like `Assert`/`assert` to notify developers and testers about
+  nonfatal errors. In production it doesn't warn or log anything, though the
+  expression is always evaluated.
+   - For example it can be assumed that a variable is only initialized once,
+     but a failed assumption does not result in a fatal bug. A failed
+     assumption may or may not result in a slightly degraded user experience,
+     but it is safe to continue program execution.
+
 ### Valgrind suppressions file
 
 Valgrind is a programming tool for memory debugging, memory leak detection, and
@@ -620,6 +647,19 @@ class A
   - *Rationale*: Easier to understand what is happening, thus easier to spot mistakes, even for those
   that are not language lawyers.
 
+- Use `Span` as function argument when it can operate on any range-like container.
+
+  - *Rationale*: Compared to `Foo(const vector<int>&)` this avoids the need for a (potentially expensive)
+    conversion to vector if the caller happens to have the input stored in another type of container.
+    However, be aware of the pitfalls documented in [span.h](../src/span.h).
+
+```cpp
+void Foo(Span<const int> data);
+
+std::vector<int> vec{1,2,3};
+Foo(vec);
+```
+
 - Prefer `enum class` (scoped enumerations) over `enum` (traditional enumerations) where possible.
 
   - *Rationale*: Scoped enumerations avoid two potential pitfalls/problems with traditional C++ enumerations: implicit conversions to `int`, and name clashes due to enumerators being exported to the surrounding scope.
@@ -732,6 +772,53 @@ the upper cycle, etc.
 
 Threads and synchronization
 ----------------------------
+
+- Prefer `Mutex` type to `RecursiveMutex` one
+
+- Consistently use [Clang Thread Safety Analysis](https://clang.llvm.org/docs/ThreadSafetyAnalysis.html) annotations to
+  get compile-time warnings about potential race conditions in code. Combine annotations in function declarations with
+  run-time asserts in function definitions:
+
+```C++
+// txmempool.h
+class CTxMemPool
+{
+public:
+    ...
+    mutable RecursiveMutex cs;
+    ...
+    void UpdateTransactionsFromBlock(...) EXCLUSIVE_LOCKS_REQUIRED(::cs_main, cs);
+    ...
+}
+
+// txmempool.cpp
+void CTxMemPool::UpdateTransactionsFromBlock(...)
+{
+    AssertLockHeld(::cs_main);
+    AssertLockHeld(cs);
+    ...
+}
+```
+
+```C++
+// validation.h
+class ChainstateManager
+{
+public:
+    ...
+    bool ProcessNewBlock(...) EXCLUSIVE_LOCKS_REQUIRED(!::cs_main);
+    ...
+}
+
+// validation.cpp
+bool ChainstateManager::ProcessNewBlock(...)
+{
+    AssertLockNotHeld(::cs_main);
+    ...
+    LOCK(::cs_main);
+    ...
+}
+```
 
 - Build and run tests with `-DDEBUG_LOCKORDER` to verify that no potential
   deadlocks are introduced. As of 0.12, this is defined by default when
@@ -874,7 +961,7 @@ Others are external projects without a tight relationship with our project. Chan
 be sent upstream, but bugfixes may also be prudent to PR against Bitcoin Core so that they can be integrated
 quickly. Cosmetic changes should be purely taken upstream.
 
-There is a tool in `test/lint/git-subtree-check.sh` to check a subtree directory for consistency with
+There is a tool in `test/lint/git-subtree-check.sh` ([instructions](../test/lint#git-subtree-checksh)) to check a subtree directory for consistency with
 its upstream repository.
 
 Current subtrees include:

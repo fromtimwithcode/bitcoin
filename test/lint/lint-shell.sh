@@ -25,7 +25,6 @@ disabled=(
 disabled_gitian=(
     SC2094 # Make sure not to read and write the same file in the same pipeline.
     SC2129 # Consider using { cmd1; cmd2; } >> file instead of individual redirects.
-    SC2230 # which is non-standard. Use builtin 'command -v' instead.
 )
 
 EXIT_CODE=0
@@ -37,7 +36,8 @@ fi
 
 SHELLCHECK_CMD=(shellcheck --external-sources --check-sourced)
 EXCLUDE="--exclude=$(IFS=','; echo "${disabled[*]}")"
-if ! "${SHELLCHECK_CMD[@]}" "$EXCLUDE" $(git ls-files -- '*.sh' | grep -vE 'src/(leveldb|secp256k1|univalue)/'); then
+SOURCED_FILES=$(git ls-files | xargs gawk '/^# shellcheck shell=/ {print FILENAME} {nextfile}')  # Check shellcheck directive used for sourced files
+if ! "${SHELLCHECK_CMD[@]}" "$EXCLUDE" $SOURCED_FILES $(git ls-files -- '*.sh' | grep -vE 'src/(leveldb|secp256k1|univalue)/'); then
     EXIT_CODE=1
 fi
 

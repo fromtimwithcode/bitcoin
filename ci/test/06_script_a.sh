@@ -6,7 +6,10 @@
 
 export LC_ALL=C.UTF-8
 
-BITCOIN_CONFIG_ALL="--disable-dependency-tracking --prefix=$DEPENDS_DIR/$HOST --bindir=$BASE_OUTDIR/bin --libdir=$BASE_OUTDIR/lib"
+BITCOIN_CONFIG_ALL="--enable-suppress-external-warnings --disable-dependency-tracking --prefix=$DEPENDS_DIR/$HOST --bindir=$BASE_OUTDIR/bin --libdir=$BASE_OUTDIR/lib"
+if [ -z "$NO_WERROR" ]; then
+  BITCOIN_CONFIG_ALL="${BITCOIN_CONFIG_ALL} --enable-werror"
+fi
 DOCKER_EXEC "ccache --zero-stats --max-size=$CCACHE_SIZE"
 
 BEGIN_FOLD autogen
@@ -36,6 +39,14 @@ END_FOLD
 
 set -o errtrace
 trap 'DOCKER_EXEC "cat ${BASE_SCRATCH_DIR}/sanitizer-output/* 2> /dev/null"' ERR
+
+if [[ ${USE_MEMORY_SANITIZER} == "true" ]]; then
+  # MemorySanitizer (MSAN) does not support tracking memory initialization done by
+  # using the Linux getrandom syscall. Avoid using getrandom by undefining
+  # HAVE_SYS_GETRANDOM. See https://github.com/google/sanitizers/issues/852 for
+  # details.
+  DOCKER_EXEC 'grep -v HAVE_SYS_GETRANDOM src/config/bitcoin-config.h > src/config/bitcoin-config.h.tmp && mv src/config/bitcoin-config.h.tmp src/config/bitcoin-config.h'
+fi
 
 BEGIN_FOLD build
 DOCKER_EXEC make $MAKEJOBS $GOAL || ( echo "Build failure. Verbose build follows." && DOCKER_EXEC make $GOAL V=1 ; false )

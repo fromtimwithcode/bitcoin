@@ -21,11 +21,6 @@
 #include <util/system.h>
 
 #ifdef WIN32
-#ifdef _WIN32_IE
-#undef _WIN32_IE
-#endif
-#define _WIN32_IE 0x0501
-#define WIN32_LEAN_AND_MEAN 1
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -48,13 +43,15 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QList>
+#include <QLocale>
+#include <QMenu>
 #include <QMouseEvent>
 #include <QProgressDialog>
 #include <QScreen>
 #include <QSettings>
+#include <QShortcut>
 #include <QSize>
 #include <QString>
-#include <QShortcut>
 #include <QTextDocument> // for Qt::mightBeRichText
 #include <QThread>
 #include <QUrlQuery>
@@ -71,7 +68,7 @@ namespace GUIUtil {
 
 QString dateTimeStr(const QDateTime &date)
 {
-    return date.date().toString(Qt::SystemLocaleShortDate) + QString(" ") + date.toString("hh:mm");
+    return QLocale::system().toString(date.date(), QLocale::ShortFormat) + QString(" ") + date.toString("hh:mm");
 }
 
 QString dateTimeStr(qint64 nTime)
@@ -93,7 +90,7 @@ static std::string DummyAddress(const CChainParams &params)
     std::vector<unsigned char> sourcedata = params.Base58Prefix(CChainParams::PUBKEY_ADDRESS);
     sourcedata.insert(sourcedata.end(), dummydata, dummydata + sizeof(dummydata));
     for(int i=0; i<256; ++i) { // Try every trailing byte
-        std::string s = EncodeBase58(sourcedata.data(), sourcedata.data() + sourcedata.size());
+        std::string s = EncodeBase58(sourcedata);
         if (!IsValidDestinationString(s)) {
             return s;
         }
@@ -187,7 +184,7 @@ QString formatBitcoinURI(const SendCoinsRecipient &info)
 
     if (info.amount)
     {
-        ret += QString("?amount=%1").arg(BitcoinUnits::format(BitcoinUnits::BTC, info.amount, false, BitcoinUnits::separatorNever));
+        ret += QString("?amount=%1").arg(BitcoinUnits::format(BitcoinUnits::BTC, info.amount, false, BitcoinUnits::SeparatorStyle::NEVER));
         paramCount++;
     }
 
@@ -231,7 +228,7 @@ QString HtmlEscape(const std::string& str, bool fMultiLine)
     return HtmlEscape(QString::fromStdString(str), fMultiLine);
 }
 
-void copyEntryData(QAbstractItemView *view, int column, int role)
+void copyEntryData(const QAbstractItemView *view, int column, int role)
 {
     if(!view || !view->selectionModel())
         return;
@@ -244,11 +241,18 @@ void copyEntryData(QAbstractItemView *view, int column, int role)
     }
 }
 
-QList<QModelIndex> getEntryData(QAbstractItemView *view, int column)
+QList<QModelIndex> getEntryData(const QAbstractItemView *view, int column)
 {
     if(!view || !view->selectionModel())
         return QList<QModelIndex>();
     return view->selectionModel()->selectedRows(column);
+}
+
+bool hasEntryData(const QAbstractItemView *view, int column, int role)
+{
+    QModelIndexList selection = getEntryData(view, column);
+    if (selection.isEmpty()) return false;
+    return !selection.at(0).data(role).toString().isEmpty();
 }
 
 QString getDefaultDataDirectory()
@@ -440,6 +444,28 @@ bool ToolTipToRichTextFilter::eventFilter(QObject *obj, QEvent *evt)
         }
     }
     return QObject::eventFilter(obj, evt);
+}
+
+LabelOutOfFocusEventFilter::LabelOutOfFocusEventFilter(QObject* parent)
+    : QObject(parent)
+{
+}
+
+bool LabelOutOfFocusEventFilter::eventFilter(QObject* watched, QEvent* event)
+{
+    if (event->type() == QEvent::FocusOut) {
+        auto focus_out = static_cast<QFocusEvent*>(event);
+        if (focus_out->reason() != Qt::PopupFocusReason) {
+            auto label = qobject_cast<QLabel*>(watched);
+            if (label) {
+                auto flags = label->textInteractionFlags();
+                label->setTextInteractionFlags(Qt::NoTextInteraction);
+                label->setTextInteractionFlags(flags);
+            }
+        }
+    }
+
+    return QObject::eventFilter(watched, event);
 }
 
 void TableViewLastColumnResizingFixer::connectViewHeadersSignals()
@@ -743,34 +769,12 @@ QString formatDurationStr(int secs)
     return strList.join(" ");
 }
 
-QString serviceFlagToStr(const quint64 mask, const int bit)
-{
-    switch (ServiceFlags(mask)) {
-    case NODE_NONE: abort();  // impossible
-    case NODE_NETWORK:         return "NETWORK";
-    case NODE_GETUTXO:         return "GETUTXO";
-    case NODE_BLOOM:           return "BLOOM";
-    case NODE_WITNESS:         return "WITNESS";
-    case NODE_NETWORK_LIMITED: return "NETWORK_LIMITED";
-    // Not using default, so we get warned when a case is missing
-    }
-    if (bit < 8) {
-        return QString("%1[%2]").arg("UNKNOWN").arg(mask);
-    } else {
-        return QString("%1[2^%2]").arg("UNKNOWN").arg(bit);
-    }
-}
-
 QString formatServicesStr(quint64 mask)
 {
     QStringList strList;
 
-    for (int i = 0; i < 64; i++) {
-        uint64_t check = 1LL << i;
-        if (mask & check)
-        {
-            strList.append(serviceFlagToStr(check, i));
-        }
+    for (const auto& flag : serviceFlagsToStr(mask)) {
+        strList.append(QString::fromStdString(flag));
     }
 
     if (strList.size())
@@ -908,6 +912,44 @@ void LogQtInfo()
     for (const QScreen* s : QGuiApplication::screens()) {
         LogPrintf("Screen: %s %dx%d, pixel ratio=%.1f\n", s->name().toStdString(), s->size().width(), s->size().height(), s->devicePixelRatio());
     }
+}
+
+void PopupMenu(QMenu* menu, const QPoint& point, QAction* at_action)
+{
+    // The qminimal plugin does not provide window system integration.
+    if (QApplication::platformName() == "minimal") return;
+    menu->popup(point, at_action);
+}
+
+QDateTime StartOfDay(const QDate& date)
+{
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 14, 0))
+    return date.startOfDay();
+#else
+    return QDateTime(date);
+#endif
+}
+
+bool HasPixmap(const QLabel* label)
+{
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
+    return !label->pixmap(Qt::ReturnByValue).isNull();
+#else
+    return label->pixmap() != nullptr;
+#endif
+}
+
+QImage GetImage(const QLabel* label)
+{
+    if (!HasPixmap(label)) {
+        return QImage();
+    }
+
+#if (QT_VERSION >= QT_VERSION_CHECK(5, 15, 0))
+    return label->pixmap(Qt::ReturnByValue).toImage();
+#else
+    return label->pixmap()->toImage();
+#endif
 }
 
 } // namespace GUIUtil

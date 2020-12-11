@@ -3,6 +3,14 @@ export LC_ALL=C
 set -e -o pipefail
 export TZ=UTC
 
+if [ -n "$V" ]; then
+    # Print both unexpanded (-v) and expanded (-x) forms of commands as they are
+    # read from this file.
+    set -vx
+    # Set VERBOSE for CMake-based builds
+    export VERBOSE="$V"
+fi
+
 # Check that environment variables assumed to be set by the environment are set
 echo "Building for platform triple ${HOST:?not set} with reference timestamp ${SOURCE_DATE_EPOCH:?not set}..."
 echo "At most ${MAX_JOBS:?not set} jobs will run at once..."
@@ -150,7 +158,7 @@ GIT_ARCHIVE="${OUTDIR}/src/${DISTNAME}.tar.gz"
 # Create the source tarball if not already there
 if [ ! -e "$GIT_ARCHIVE" ]; then
     mkdir -p "$(dirname "$GIT_ARCHIVE")"
-    git archive --output="$GIT_ARCHIVE" HEAD
+    git archive --prefix="${DISTNAME}/" --output="$GIT_ARCHIVE" HEAD
 fi
 
 ###########################
@@ -185,7 +193,7 @@ export PATH="${BASEPREFIX}/${HOST}/native/bin:${PATH}"
     cd "$DISTSRC"
 
     # Extract the source tarball
-    tar -xf "${GIT_ARCHIVE}"
+    tar --strip-components=1 -xf "${GIT_ARCHIVE}"
 
     ./autogen.sh
 
