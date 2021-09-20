@@ -6,6 +6,7 @@
 #include <banman.h>
 #include <chain.h>
 #include <chainparams.h>
+#include <deploymentstatus.h>
 #include <external_signer.h>
 #include <init.h>
 #include <interfaces/chain.h>
@@ -71,7 +72,7 @@ class NodeImpl : public Node
 private:
     ChainstateManager& chainman() { return *Assert(m_context->chainman); }
 public:
-    explicit NodeImpl(NodeContext* context) { setContext(context); }
+    explicit NodeImpl(NodeContext& context) { setContext(&context); }
     void initLogging() override { InitLogging(*Assert(m_context->args)); }
     void initParameterInteraction() override { InitParameterInteraction(*Assert(m_context->args)); }
     bilingual_str getWarnings() override { return GetWarnings(true); }
@@ -333,6 +334,7 @@ bool FillBlock(const CBlockIndex* index, const FoundBlock& block, UniqueLock<Rec
         REVERSE_LOCK(lock);
         if (!ReadBlockFromDisk(*block.m_data, index, Params().GetConsensus())) block.m_data->SetNull();
     }
+    block.found = true;
     return true;
 }
 
@@ -573,11 +575,11 @@ public:
         // that Chain clients do not need to know about.
         return TransactionError::OK == err;
     }
-    void getTransactionAncestry(const uint256& txid, size_t& ancestors, size_t& descendants) override
+    void getTransactionAncestry(const uint256& txid, size_t& ancestors, size_t& descendants, size_t* ancestorsize, CAmount* ancestorfees) override
     {
         ancestors = descendants = 0;
         if (!m_node.mempool) return;
-        m_node.mempool->GetTransactionAncestry(txid, ancestors, descendants);
+        m_node.mempool->GetTransactionAncestry(txid, ancestors, descendants, ancestorsize, ancestorfees);
     }
     void getPackageLimits(unsigned int& limit_ancestor_count, unsigned int& limit_descendant_count) override
     {
@@ -659,6 +661,14 @@ public:
         RPCRunLater(name, std::move(fn), seconds);
     }
     int rpcSerializationFlags() override { return RPCSerializationFlags(); }
+    util::SettingsValue getSetting(const std::string& name) override
+    {
+        return gArgs.GetSetting(name);
+    }
+    std::vector<util::SettingsValue> getSettingsList(const std::string& name) override
+    {
+        return gArgs.GetSettingsList(name);
+    }
     util::SettingsValue getRwSetting(const std::string& name) override
     {
         util::SettingsValue result;
@@ -669,7 +679,7 @@ public:
         });
         return result;
     }
-    bool updateRwSetting(const std::string& name, const util::SettingsValue& value) override
+    bool updateRwSetting(const std::string& name, const util::SettingsValue& value, bool write) override
     {
         gArgs.LockSettings([&](util::Settings& settings) {
             if (value.isNull()) {
@@ -678,7 +688,7 @@ public:
                 settings.rw_settings[name] = value;
             }
         });
-        return gArgs.WriteSettingsFile();
+        return !write || gArgs.WriteSettingsFile();
     }
     void requestMempoolTransactions(Notifications& notifications) override
     {
@@ -692,7 +702,7 @@ public:
     {
         LOCK(::cs_main);
         const CBlockIndex* tip = Assert(m_node.chainman)->ActiveChain().Tip();
-        return VersionBitsState(tip, Params().GetConsensus(), Consensus::DEPLOYMENT_TAPROOT, versionbitscache) == ThresholdState::ACTIVE;
+        return DeploymentActiveAfter(tip, Params().GetConsensus(), Consensus::DEPLOYMENT_TAPROOT);
     }
     NodeContext& m_node;
 };
@@ -700,6 +710,6 @@ public:
 } // namespace node
 
 namespace interfaces {
-std::unique_ptr<Node> MakeNode(NodeContext* context) { return std::make_unique<node::NodeImpl>(context); }
+std::unique_ptr<Node> MakeNode(NodeContext& context) { return std::make_unique<node::NodeImpl>(context); }
 std::unique_ptr<Chain> MakeChain(NodeContext& context) { return std::make_unique<node::ChainImpl>(context); }
 } // namespace interfaces

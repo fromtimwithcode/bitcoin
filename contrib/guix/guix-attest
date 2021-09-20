@@ -18,7 +18,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/libexec/prelude.bash"
 # Required non-builtin commands should be invokable
 ################
 
-check_tools cat env basename mkdir xargs find
+check_tools cat env basename mkdir diff sort
 if [ -z "$NO_SIGN" ]; then
     check_tools gpg
 fi
@@ -162,6 +162,18 @@ EOF
 echo "Attesting to build outputs for version: '${VERSION}'"
 echo ""
 
+# Given a SHA256SUMS file as stdin that has lines like:
+#     0ba536819b221a91d3d42e978be016aac918f40984754d74058aa0c921cd3ea6  a/b/d/c/d/s/bitcoin-22.0rc2-riscv64-linux-gnu.tar.gz
+#     ...
+#
+# Replace each line's file name with its basename:
+#     0ba536819b221a91d3d42e978be016aac918f40984754d74058aa0c921cd3ea6  bitcoin-22.0rc2-riscv64-linux-gnu.tar.gz
+#     ...
+#
+basenameify_SHA256SUMS() {
+    sed -E 's@(^[[:xdigit:]]{64}[[:space:]]+).+/([^/]+$)@\1\2@'
+}
+
 outsigdir="$GUIX_SIGS_REPO/$VERSION/$signer_name"
 mkdir -p "$outsigdir"
 (
@@ -174,7 +186,8 @@ mkdir -p "$outsigdir"
         cat "${noncodesigned_fragments[@]}" \
             | sort -u \
             | sort -k2 \
-                   > "$temp_noncodesigned"
+            | basenameify_SHA256SUMS \
+                > "$temp_noncodesigned"
         if [ -e noncodesigned.SHA256SUMS ]; then
             # The SHA256SUMS already exists, make sure it's exactly what we
             # expect, error out if not
@@ -192,8 +205,8 @@ mkdir -p "$outsigdir"
         exit 1
     fi
 
-    temp_codesigned="$(mktemp)"
-    trap 'rm -rf -- "$temp_codesigned"' EXIT
+    temp_all="$(mktemp)"
+    trap 'rm -rf -- "$temp_all"' EXIT
 
     if (( ${#codesigned_fragments[@]} )); then
         # Note: all.SHA256SUMS attests to all of $sha256sum_fragments, but is
@@ -201,18 +214,19 @@ mkdir -p "$outsigdir"
         cat "${sha256sum_fragments[@]}" \
             | sort -u \
             | sort -k2 \
-                   > "$temp_codesigned"
-        if [ -e codesigned.SHA256SUMS ]; then
+            | basenameify_SHA256SUMS \
+                > "$temp_all"
+        if [ -e all.SHA256SUMS ]; then
             # The SHA256SUMS already exists, make sure it's exactly what we
             # expect, error out if not
-            if diff -u all.SHA256SUMS "$temp_codesigned"; then
+            if diff -u all.SHA256SUMS "$temp_all"; then
                 echo "An all.SHA256SUMS file already exists for '${VERSION}' and is up-to-date."
             else
                 shasum_already_exists all.SHA256SUMS
                 exit 1
             fi
         else
-            mv "$temp_codesigned" codesigned.SHA256SUMS
+            mv "$temp_all" all.SHA256SUMS
         fi
     else
         # It is fine to have the codesigned outputs be missing (perhaps the
@@ -226,6 +240,7 @@ mkdir -p "$outsigdir"
         for i in *.SHA256SUMS; do
             if [ ! -e "$i".asc ]; then
                 gpg --detach-sign \
+                    --digest-algo sha256 \
                     --local-user "$gpg_key_name" \
                     --armor \
                     --output "$i".asc "$i"

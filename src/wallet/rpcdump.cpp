@@ -3,6 +3,7 @@
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chain.h>
+#include <clientversion.h>
 #include <core_io.h>
 #include <interfaces/chain.h>
 #include <key_io.h>
@@ -740,7 +741,7 @@ RPCHelpMan dumpwallet()
     // the user could have gotten from another RPC command prior to now
     wallet.BlockUntilSyncedToCurrentChain();
 
-    LOCK2(wallet.cs_wallet, spk_man.cs_KeyStore);
+    LOCK(wallet.cs_wallet);
 
     EnsureWalletIsUnlocked(wallet);
 
@@ -762,9 +763,16 @@ RPCHelpMan dumpwallet()
         throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot open wallet dump file");
 
     std::map<CKeyID, int64_t> mapKeyBirth;
-    const std::map<CKeyID, int64_t>& mapKeyPool = spk_man.GetAllReserveKeys();
     wallet.GetKeyBirthTimes(mapKeyBirth);
 
+    int64_t block_time = 0;
+    CHECK_NONFATAL(wallet.chain().findBlock(wallet.GetLastBlockHash(), FoundBlock().time(block_time)));
+
+    // Note: To avoid a lock order issue, access to cs_main must be locked before cs_KeyStore.
+    // So we do the two things in this function that lock cs_main first: GetKeyBirthTimes, and findBlock.
+    LOCK(spk_man.cs_KeyStore);
+
+    const std::map<CKeyID, int64_t>& mapKeyPool = spk_man.GetAllReserveKeys();
     std::set<CScriptID> scripts = spk_man.GetCScripts();
 
     // sort time/key pairs
@@ -776,11 +784,9 @@ RPCHelpMan dumpwallet()
     std::sort(vKeyBirth.begin(), vKeyBirth.end());
 
     // produce output
-    file << strprintf("# Wallet dump created by Bitcoin %s\n", CLIENT_BUILD);
+    file << strprintf("# Wallet dump created by %s %s\n", PACKAGE_NAME, FormatFullVersion());
     file << strprintf("# * Created on %s\n", FormatISO8601DateTime(GetTime()));
     file << strprintf("# * Best block at time of backup was %i (%s),\n", wallet.GetLastBlockHeight(), wallet.GetLastBlockHash().ToString());
-    int64_t block_time = 0;
-    CHECK_NONFATAL(wallet.chain().findBlock(wallet.GetLastBlockHash(), FoundBlock().time(block_time)));
     file << strprintf("#   mined on %s\n", FormatISO8601DateTime(block_time));
     file << "\n";
 
@@ -1566,9 +1572,8 @@ static UniValue ProcessDescriptorImport(CWallet& wallet, const UniValue& data, c
         // Check if the wallet already contains the descriptor
         auto existing_spk_manager = wallet.GetDescriptorScriptPubKeyMan(w_desc);
         if (existing_spk_manager) {
-            LOCK(existing_spk_manager->cs_desc_man);
-            if (range_start > existing_spk_manager->GetWalletDescriptor().range_start) {
-                throw JSONRPCError(RPC_INVALID_PARAMS, strprintf("range_start can only decrease; current range = [%d,%d]", existing_spk_manager->GetWalletDescriptor().range_start, existing_spk_manager->GetWalletDescriptor().range_end));
+            if (!existing_spk_manager->CanUpdateToWalletDescriptor(w_desc, error)) {
+                throw JSONRPCError(RPC_INVALID_PARAMETER, error);
             }
         }
 
@@ -1585,16 +1590,16 @@ static UniValue ProcessDescriptorImport(CWallet& wallet, const UniValue& data, c
             } else {
                 wallet.AddActiveScriptPubKeyMan(spk_manager->GetID(), *w_desc.descriptor->GetOutputType(), internal);
             }
+        } else {
+            if (w_desc.descriptor->GetOutputType()) {
+                wallet.DeactivateScriptPubKeyMan(spk_manager->GetID(), *w_desc.descriptor->GetOutputType(), internal);
+            }
         }
 
         result.pushKV("success", UniValue(true));
     } catch (const UniValue& e) {
         result.pushKV("success", UniValue(false));
         result.pushKV("error", e);
-    } catch (...) {
-        result.pushKV("success", UniValue(false));
-
-        result.pushKV("error", JSONRPCError(RPC_MISC_ERROR, "Missing required fields"));
     }
     if (warnings.size()) result.pushKV("warnings", warnings);
     return result;
@@ -1756,8 +1761,10 @@ RPCHelpMan listdescriptors()
 {
     return RPCHelpMan{
         "listdescriptors",
-        "\nList descriptors imported into a descriptor-enabled wallet.",
-        {},
+        "\nList descriptors imported into a descriptor-enabled wallet.\n",
+        {
+            {"private", RPCArg::Type::BOOL, RPCArg::Default{false}, "Show private descriptors."}
+        },
         RPCResult{RPCResult::Type::OBJ, "", "", {
             {RPCResult::Type::STR, "wallet_name", "Name of wallet this operation was performed on"},
             {RPCResult::Type::ARR, "descriptors", "Array of descriptor objects",
@@ -1777,6 +1784,7 @@ RPCHelpMan listdescriptors()
         }},
         RPCExamples{
             HelpExampleCli("listdescriptors", "") + HelpExampleRpc("listdescriptors", "")
+            + HelpExampleCli("listdescriptors", "true") + HelpExampleRpc("listdescriptors", "true")
         },
         [&](const RPCHelpMan& self, const JSONRPCRequest& request) -> UniValue
 {
@@ -1787,7 +1795,10 @@ RPCHelpMan listdescriptors()
         throw JSONRPCError(RPC_WALLET_ERROR, "listdescriptors is not available for non-descriptor wallets");
     }
 
-    EnsureWalletIsUnlocked(*wallet);
+    const bool priv = !request.params[0].isNull() && request.params[0].get_bool();
+    if (priv) {
+        EnsureWalletIsUnlocked(*wallet);
+    }
 
     LOCK(wallet->cs_wallet);
 
@@ -1802,8 +1813,9 @@ RPCHelpMan listdescriptors()
         LOCK(desc_spk_man->cs_desc_man);
         const auto& wallet_descriptor = desc_spk_man->GetWalletDescriptor();
         std::string descriptor;
-        if (!desc_spk_man->GetDescriptorString(descriptor, false)) {
-            throw JSONRPCError(RPC_WALLET_ERROR, "Can't get normalized descriptor string.");
+
+        if (!desc_spk_man->GetDescriptorString(descriptor, priv)) {
+            throw JSONRPCError(RPC_WALLET_ERROR, "Can't get descriptor string.");
         }
         spk.pushKV("desc", descriptor);
         spk.pushKV("timestamp", wallet_descriptor.creation_time);

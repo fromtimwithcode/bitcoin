@@ -39,8 +39,7 @@ enum
  *  All flags are intended to be soft forks: the set of acceptable scripts under
  *  flags (A | B) is a subset of the acceptable scripts under flag (A).
  */
-enum
-{
+enum : uint32_t {
     SCRIPT_VERIFY_NONE      = 0,
 
     // Evaluate P2SH subscripts (BIP16).
@@ -140,6 +139,10 @@ enum
 
     // Making unknown public key versions (in BIP 342 scripts) non-standard
     SCRIPT_VERIFY_DISCOURAGE_UPGRADABLE_PUBKEYTYPE = (1U << 20),
+
+    // Constants to point to the highest flag in use. Add new flags above this line.
+    //
+    SCRIPT_VERIFY_END_MARKER
 };
 
 bool CheckSignatureEncoding(const std::vector<unsigned char> &vchSig, unsigned int flags, ScriptError* serror);
@@ -167,6 +170,13 @@ struct PrecomputedTransactionData
 
     PrecomputedTransactionData() = default;
 
+    /** Initialize this PrecomputedTransactionData with transaction data.
+     *
+     * @param[in]   tx             The transaction for which data is being precomputed.
+     * @param[in]   spent_outputs  The CTxOuts being spent, one for each tx.vin, in order.
+     * @param[in]   force          Whether to precompute data for all optional features,
+     *                             regardless of what is in the inputs (used at signing
+     *                             time, when the inputs aren't filled in yet). */
     template <class T>
     void Init(const T& tx, std::vector<CTxOut>&& spent_outputs, bool force = false);
 

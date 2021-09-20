@@ -35,6 +35,7 @@
 #endif
 
 #include <QAbstractButton>
+#include <QAbstractItemModel>
 #include <QDateTime>
 #include <QFont>
 #include <QKeyEvent>
@@ -287,6 +288,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                 }
                 if (breakParsing)
                     break;
+                [[fallthrough]];
             }
             case STATE_ARGUMENT: // In or after argument
             case STATE_EATING_SPACES_IN_ARG:
@@ -400,6 +402,7 @@ bool RPCConsole::RPCParseCommandLine(interfaces::Node* node, std::string &strRes
                 strResult = lastResult.get_str();
             else
                 strResult = lastResult.write(2);
+            [[fallthrough]];
         case STATE_ARGUMENT:
         case STATE_EATING_SPACES:
             return true;
@@ -529,6 +532,8 @@ RPCConsole::RPCConsole(interfaces::Node& node, const PlatformStyle *_platformSty
     //: Secondary shortcut to decrease the RPC console font size.
     GUIUtil::AddButtonShortcut(ui->fontSmallerButton, tr("Ctrl+_"));
 
+    ui->promptIcon->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/prompticon")));
+
     // Install event filter for up and down arrow
     ui->lineEdit->installEventFilter(this);
     ui->lineEdit->setMaxLength(16 * 1024 * 1024);
@@ -646,7 +651,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
         setNumConnections(model->getNumConnections());
         connect(model, &ClientModel::numConnectionsChanged, this, &RPCConsole::setNumConnections);
 
-        setNumBlocks(bestblock_height, QDateTime::fromTime_t(bestblock_date), verification_progress, false);
+        setNumBlocks(bestblock_height, QDateTime::fromSecsSinceEpoch(bestblock_date), verification_progress, false);
         connect(model, &ClientModel::numBlocksChanged, this, &RPCConsole::setNumBlocks);
 
         updateNetworkState();
@@ -675,6 +680,11 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
 
         // create peer table context menu
         peersTableContextMenu = new QMenu(this);
+        //: Context menu action to copy the address of a peer.
+        peersTableContextMenu->addAction(tr("&Copy address"), [this] {
+            GUIUtil::copyEntryData(ui->peerWidget, PeerTableModel::Address, Qt::DisplayRole);
+        });
+        peersTableContextMenu->addSeparator();
         peersTableContextMenu->addAction(tr("&Disconnect"), this, &RPCConsole::disconnectSelectedNode);
         peersTableContextMenu->addAction(ts.ban_for + " " + tr("1 &hour"), [this] { banSelectedNode(60 * 60); });
         peersTableContextMenu->addAction(ts.ban_for + " " + tr("1 d&ay"), [this] { banSelectedNode(60 * 60 * 24); });
@@ -684,7 +694,7 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
 
         // peer table signal handling - update peer details when selecting new node
         connect(ui->peerWidget->selectionModel(), &QItemSelectionModel::selectionChanged, this, &RPCConsole::updateDetailWidget);
-        connect(model->getPeerTableModel(), &PeerTableModel::changed, this, &RPCConsole::updateDetailWidget);
+        connect(model->getPeerTableModel(), &QAbstractItemModel::dataChanged, [this] { updateDetailWidget(); });
 
         // set up ban table
         ui->banlistWidget->setModel(model->getBanTableModel());
@@ -701,6 +711,13 @@ void RPCConsole::setClientModel(ClientModel *model, int bestblock_height, int64_
 
         // create ban table context menu
         banTableContextMenu = new QMenu(this);
+        /*: Context menu action to copy the IP/Netmask of a banned peer.
+            IP/Netmask is the combination of a peer's IP address and its Netmask.
+            For IP address, see: https://en.wikipedia.org/wiki/IP_address. */
+        banTableContextMenu->addAction(tr("&Copy IP/Netmask"), [this] {
+            GUIUtil::copyEntryData(ui->banlistWidget, BanTableModel::Address, Qt::DisplayRole);
+        });
+        banTableContextMenu->addSeparator();
         banTableContextMenu->addAction(tr("&Unban"), this, &RPCConsole::unbanSelectedNode);
         connect(ui->banlistWidget, &QTableView::customContextMenuRequested, this, &RPCConsole::showBanTableContextMenu);
 
@@ -882,7 +899,6 @@ void RPCConsole::keyPressEvent(QKeyEvent *event)
 
 void RPCConsole::changeEvent(QEvent* e)
 {
-#ifdef Q_OS_MACOS
     if (e->type() == QEvent::PaletteChange) {
         ui->clearButton->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/remove")));
         ui->fontBiggerButton->setIcon(platformStyle->SingleColorIcon(QStringLiteral(":/icons/fontbigger")));
@@ -896,7 +912,8 @@ void RPCConsole::changeEvent(QEvent* e)
                 platformStyle->SingleColorImage(ICON_MAPPING[i].source).scaled(QSize(consoleFontSize * 2, consoleFontSize * 2), Qt::IgnoreAspectRatio, Qt::SmoothTransformation));
         }
     }
-#endif
+
+    QWidget::changeEvent(e);
 }
 
 void RPCConsole::message(int category, const QString &message, bool html)
@@ -1124,7 +1141,7 @@ void RPCConsole::updateDetailWidget()
     }
     const auto stats = selected_peers.first().data(PeerTableModel::StatsRole).value<CNodeCombinedStats*>();
     // update the detail ui with latest node information
-    QString peerAddrDetails(QString::fromStdString(stats->nodeStats.addrName) + " ");
+    QString peerAddrDetails(QString::fromStdString(stats->nodeStats.m_addr_name) + " ");
     peerAddrDetails += tr("(peer: %1)").arg(QString::number(stats->nodeStats.nodeid));
     if (!stats->nodeStats.addrLocal.empty())
         peerAddrDetails += "<br />" + tr("via %1").arg(QString::fromStdString(stats->nodeStats.addrLocal));

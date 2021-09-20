@@ -69,7 +69,7 @@ uint256 SendCoins(CWallet& wallet, SendCoinsDialog& sendCoinsDialog, const CTxDe
         ->findChild<QCheckBox*>("optInRBF")
         ->setCheckState(rbf ? Qt::Checked : Qt::Unchecked);
     uint256 txid;
-    boost::signals2::scoped_connection c(wallet.NotifyTransactionChanged.connect([&txid](CWallet*, const uint256& hash, ChangeType status) {
+    boost::signals2::scoped_connection c(wallet.NotifyTransactionChanged.connect([&txid](const uint256& hash, ChangeType status) {
         if (status == CT_NEW) txid = hash;
     }));
     ConfirmSend();
@@ -138,6 +138,8 @@ void TestGUI(interfaces::Node& node)
     for (int i = 0; i < 5; ++i) {
         test.CreateAndProcessBlock({}, GetScriptForRawPubKey(test.coinbaseKey.GetPubKey()));
     }
+    auto wallet_client = interfaces::MakeWalletClient(*test.m_node.chain, *Assert(test.m_node.args));
+    test.m_node.wallet_client = wallet_client.get();
     node.setContext(&test.m_node);
     std::shared_ptr<CWallet> wallet = std::make_shared<CWallet>(node.context()->chain.get(), "", CreateMockWalletDatabase());
     wallet->LoadWallet();
@@ -164,9 +166,10 @@ void TestGUI(interfaces::Node& node)
     TransactionView transactionView(platformStyle.get());
     OptionsModel optionsModel;
     ClientModel clientModel(node, &optionsModel);
-    AddWallet(wallet);
-    WalletModel walletModel(interfaces::MakeWallet(wallet), clientModel, platformStyle.get());
-    RemoveWallet(wallet, std::nullopt);
+    WalletContext& context = *node.walletClient().context();
+    AddWallet(context, wallet);
+    WalletModel walletModel(interfaces::MakeWallet(context, wallet), clientModel, platformStyle.get());
+    RemoveWallet(context, wallet, /* load_on_start= */ std::nullopt);
     sendCoinsDialog.setModel(&walletModel);
     transactionView.setModel(&walletModel);
 

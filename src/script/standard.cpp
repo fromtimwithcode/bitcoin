@@ -407,7 +407,13 @@ void TaprootSpendData::Merge(TaprootSpendData other)
         merkle_root = other.merkle_root;
     }
     for (auto& [key, control_blocks] : other.scripts) {
-        scripts[key].merge(std::move(control_blocks));
+        // Once P0083R3 is supported by all our targeted platforms,
+        // this loop body can be replaced with:
+        // scripts[key].merge(std::move(control_blocks));
+        auto& target = scripts[key];
+        for (auto& control_block: control_blocks) {
+            target.insert(std::move(control_block));
+        }
     }
 }
 
@@ -498,6 +504,7 @@ WitnessV1Taproot TaprootBuilder::GetOutput() { return WitnessV1Taproot{m_output_
 
 TaprootSpendData TaprootBuilder::GetSpendData() const
 {
+    assert(IsComplete());
     TaprootSpendData spd;
     spd.merkle_root = m_branch.size() == 0 ? uint256() : m_branch[0]->hash;
     spd.internal_key = m_internal_key;

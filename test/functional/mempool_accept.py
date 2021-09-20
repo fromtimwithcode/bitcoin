@@ -13,21 +13,23 @@ from test_framework.messages import (
     BIP125_SEQUENCE_NUMBER,
     COIN,
     COutPoint,
+    CTxIn,
     CTxOut,
-    MAX_BLOCK_BASE_SIZE,
+    MAX_BLOCK_WEIGHT,
     MAX_MONEY,
     tx_from_hex,
 )
 from test_framework.script import (
-    hash160,
     CScript,
     OP_0,
     OP_2,
     OP_3,
     OP_CHECKMULTISIG,
-    OP_EQUAL,
     OP_HASH160,
     OP_RETURN,
+)
+from test_framework.script_util import (
+    script_to_p2sh_script,
 )
 from test_framework.util import (
     assert_equal,
@@ -76,7 +78,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
             outputs=[{node.getnewaddress(): 0.3}, {node.getnewaddress(): 49}],
         ))['hex']
         txid_in_block = node.sendrawtransaction(hexstring=raw_tx_in_block, maxfeerate=0)
-        node.generate(1)
+        self.generate(node, 1)
         self.mempool_size = 0
         self.check_mempool_result(
             result_expected=[{'txid': txid_in_block, 'allowed': False, 'reject-reason': 'txn-already-known'}],
@@ -170,7 +172,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
             outputs=[{node.getnewaddress(): 0.1}]
         ))['hex']
         txid_spend_both = node.sendrawtransaction(hexstring=raw_tx_spend_both, maxfeerate=0)
-        node.generate(1)
+        self.generate(node, 1)
         self.mempool_size = 0
         # Now see if we can add the coins back to the utxo set by sending the exact txs again
         self.check_mempool_result(
@@ -207,7 +209,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
 
         self.log.info('A really large transaction')
         tx = tx_from_hex(raw_tx_reference)
-        tx.vin = [tx.vin[0]] * math.ceil(MAX_BLOCK_BASE_SIZE / len(tx.vin[0].serialize()))
+        tx.vin = [tx.vin[0]] * math.ceil(MAX_BLOCK_WEIGHT // 4 / len(tx.vin[0].serialize()))
         self.check_mempool_result(
             result_expected=[{'txid': tx.rehash(), 'allowed': False, 'reject-reason': 'bad-txns-oversize'}],
             rawtxs=[tx.serialize().hex()],
@@ -244,6 +246,14 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
         tx.vin = [tx.vin[0]] * 2
         self.check_mempool_result(
             result_expected=[{'txid': tx.rehash(), 'allowed': False, 'reject-reason': 'bad-txns-inputs-duplicate'}],
+            rawtxs=[tx.serialize().hex()],
+        )
+
+        self.log.info('A non-coinbase transaction with coinbase-like outpoint')
+        tx = tx_from_hex(raw_tx_reference)
+        tx.vin.append(CTxIn(COutPoint(hash=0, n=0xffffffff)))
+        self.check_mempool_result(
+            result_expected=[{'txid': tx.rehash(), 'allowed': False, 'reject-reason': 'bad-txns-prevout-null'}],
             rawtxs=[tx.serialize().hex()],
         )
 
@@ -291,7 +301,7 @@ class MempoolAcceptanceTest(BitcoinTestFramework):
             rawtxs=[tx.serialize().hex()],
         )
         tx = tx_from_hex(raw_tx_reference)
-        output_p2sh_burn = CTxOut(nValue=540, scriptPubKey=CScript([OP_HASH160, hash160(b'burn'), OP_EQUAL]))
+        output_p2sh_burn = CTxOut(nValue=540, scriptPubKey=script_to_p2sh_script(b'burn'))
         num_scripts = 100000 // len(output_p2sh_burn.serialize())  # Use enough outputs to make the tx too large for our policy
         tx.vout = [output_p2sh_burn] * num_scripts
         self.check_mempool_result(

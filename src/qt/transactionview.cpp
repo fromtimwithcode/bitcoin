@@ -19,6 +19,8 @@
 
 #include <node/ui_interface.h>
 
+#include <optional>
+
 #include <QApplication>
 #include <QComboBox>
 #include <QDateTimeEdit>
@@ -245,7 +247,6 @@ void TransactionView::setModel(WalletModel *_model)
 
 void TransactionView::changeEvent(QEvent* e)
 {
-#ifdef Q_OS_MACOS
     if (e->type() == QEvent::PaletteChange) {
         watchOnlyWidget->setItemIcon(
             TransactionFilterProxy::WatchOnlyFilter_Yes,
@@ -254,7 +255,8 @@ void TransactionView::changeEvent(QEvent* e)
             TransactionFilterProxy::WatchOnlyFilter_No,
             m_platform_style->SingleColorIcon(QStringLiteral(":/icons/eye_minus")));
     }
-#endif
+
+    QWidget::changeEvent(e);
 }
 
 void TransactionView::chooseDate(int idx)
@@ -266,26 +268,26 @@ void TransactionView::chooseDate(int idx)
     {
     case All:
         transactionProxyModel->setDateRange(
-                TransactionFilterProxy::MIN_DATE,
-                TransactionFilterProxy::MAX_DATE);
+                std::nullopt,
+                std::nullopt);
         break;
     case Today:
         transactionProxyModel->setDateRange(
                 GUIUtil::StartOfDay(current),
-                TransactionFilterProxy::MAX_DATE);
+                std::nullopt);
         break;
     case ThisWeek: {
         // Find last Monday
         QDate startOfWeek = current.addDays(-(current.dayOfWeek()-1));
         transactionProxyModel->setDateRange(
                 GUIUtil::StartOfDay(startOfWeek),
-                TransactionFilterProxy::MAX_DATE);
+                std::nullopt);
 
         } break;
     case ThisMonth:
         transactionProxyModel->setDateRange(
                 GUIUtil::StartOfDay(QDate(current.year(), current.month(), 1)),
-                TransactionFilterProxy::MAX_DATE);
+                std::nullopt);
         break;
     case LastMonth:
         transactionProxyModel->setDateRange(
@@ -295,7 +297,7 @@ void TransactionView::chooseDate(int idx)
     case ThisYear:
         transactionProxyModel->setDateRange(
                 GUIUtil::StartOfDay(QDate(current.year(), 1, 1)),
-                TransactionFilterProxy::MAX_DATE);
+                std::nullopt);
         break;
     case Range:
         dateRangeWidget->setVisible(true);
@@ -351,7 +353,7 @@ void TransactionView::exportClicked()
     QString filename = GUIUtil::getSaveFileName(this,
         tr("Export Transaction History"), QString(),
         /*: Expanded name of the CSV file format.
-            See https://en.wikipedia.org/wiki/Comma-separated_values */
+            See: https://en.wikipedia.org/wiki/Comma-separated_values. */
         tr("Comma separated file") + QLatin1String(" (*.csv)"), nullptr);
 
     if (filename.isNull())
