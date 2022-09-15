@@ -1,15 +1,27 @@
-// Copyright (c) 2016-2020 The Bitcoin Core developers
+// Copyright (c) 2016-2021 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #ifndef BITCOIN_POLICY_RBF_H
 #define BITCOIN_POLICY_RBF_H
 
+#include <consensus/amount.h>
+#include <primitives/transaction.h>
+#include <threadsafety.h>
 #include <txmempool.h>
 
-/** Maximum number of transactions that can be replaced by BIP125 RBF (Rule #5). This includes all
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+#include <set>
+#include <string>
+
+class CFeeRate;
+class uint256;
+
+/** Maximum number of transactions that can be replaced by RBF (Rule #5). This includes all
  * mempool conflicts and their descendants. */
-static constexpr uint32_t MAX_BIP125_REPLACEMENT_CANDIDATES{100};
+static constexpr uint32_t MAX_REPLACEMENT_CANDIDATES{100};
 
 /** The rbf state of unconfirmed transactions */
 enum class RBFTransactionState {
@@ -35,27 +47,28 @@ enum class RBFTransactionState {
 RBFTransactionState IsRBFOptIn(const CTransaction& tx, const CTxMemPool& pool) EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
 RBFTransactionState IsRBFOptInEmptyMempool(const CTransaction& tx);
 
-/** Get all descendants of iters_conflicting. Also enforce BIP125 Rule #5, "The number of original
- * transactions to be replaced and their descendant transactions which will be evicted from the
- * mempool must not exceed a total of 100 transactions." Quit as early as possible. There cannot be
- * more than MAX_BIP125_REPLACEMENT_CANDIDATES potential entries.
+/** Get all descendants of iters_conflicting. Checks that there are no more than
+ * MAX_REPLACEMENT_CANDIDATES potential entries. May overestimate if the entries in
+ * iters_conflicting have overlapping descendants.
  * @param[in]   iters_conflicting   The set of iterators to mempool entries.
  * @param[out]  all_conflicts       Populated with all the mempool entries that would be replaced,
- *                                  which includes descendants of iters_conflicting. Not cleared at
- *                                  the start; any existing mempool entries will remain in the set.
- * @returns an error message if Rule #5 is broken, otherwise a std::nullopt.
+ *                                  which includes iters_conflicting and all entries' descendants.
+ *                                  Not cleared at the start; any existing mempool entries will
+ *                                  remain in the set.
+ * @returns an error message if MAX_REPLACEMENT_CANDIDATES may be exceeded, otherwise a std::nullopt.
  */
 std::optional<std::string> GetEntriesForConflicts(const CTransaction& tx, CTxMemPool& pool,
                                                   const CTxMemPool::setEntries& iters_conflicting,
                                                   CTxMemPool::setEntries& all_conflicts)
-                                                  EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
+    EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
 
-/** BIP125 Rule #2: "The replacement transaction may only include an unconfirmed input if that input
- * was included in one of the original transactions."
- * @returns error message if Rule #2 is broken, otherwise std::nullopt. */
+/** The replacement transaction may only include an unconfirmed input if that input was included in
+ * one of the original transactions.
+ * @returns error message if tx spends unconfirmed inputs not also spent by iters_conflicting,
+ * otherwise std::nullopt. */
 std::optional<std::string> HasNoNewUnconfirmed(const CTransaction& tx, const CTxMemPool& pool,
                                                const CTxMemPool::setEntries& iters_conflicting)
-                                               EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
+    EXCLUSIVE_LOCKS_REQUIRED(pool.cs);
 
 /** Check the intersection between two sets of transactions (a set of mempool entries and a set of
  * txids) to make sure they are disjoint.
@@ -78,18 +91,19 @@ std::optional<std::string> EntriesAndTxidsDisjoint(const CTxMemPool::setEntries&
 std::optional<std::string> PaysMoreThanConflicts(const CTxMemPool::setEntries& iters_conflicting,
                                                  CFeeRate replacement_feerate, const uint256& txid);
 
-/** Enforce BIP125 Rule #3 "The replacement transaction pays an absolute fee of at least the sum
- * paid by the original transactions." Enforce BIP125 Rule #4 "The replacement transaction must also
- * pay for its own bandwidth at or above the rate set by the node's minimum relay fee setting."
+/** The replacement transaction must pay more fees than the original transactions. The additional
+ * fees must pay for the replacement's bandwidth at or above the incremental relay feerate.
  * @param[in]   original_fees       Total modified fees of original transaction(s).
  * @param[in]   replacement_fees    Total modified fees of replacement transaction(s).
  * @param[in]   replacement_vsize   Total virtual size of replacement transaction(s).
+ * @param[in]   relay_fee           The node's minimum feerate for transaction relay.
  * @param[in]   txid                Transaction ID, included in the error message if violation occurs.
  * @returns error string if fees are insufficient, otherwise std::nullopt.
  */
 std::optional<std::string> PaysForRBF(CAmount original_fees,
                                       CAmount replacement_fees,
                                       size_t replacement_vsize,
+                                      CFeeRate relay_fee,
                                       const uint256& txid);
 
 #endif // BITCOIN_POLICY_RBF_H
