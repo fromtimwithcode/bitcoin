@@ -1,11 +1,16 @@
-// Copyright (c) 2018-2020 The Bitcoin Core developers
+// Copyright (c) 2018-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <bench/bench.h>
 #include <blockfilter.h>
+#include <uint256.h>
 
-static const GCSFilter::ElementSet GenerateGCSTestElements()
+#include <cstdint>
+#include <utility>
+#include <vector>
+
+static GCSFilter::ElementSet GenerateGCSTestElements()
 {
     GCSFilter::ElementSet elements;
 
@@ -81,8 +86,8 @@ static void GCSFilterMatch(benchmark::Bench& bench)
         filter.Match(GCSFilter::Element());
     });
 }
-BENCHMARK(GCSBlockFilterGetHash);
-BENCHMARK(GCSFilterConstruct);
-BENCHMARK(GCSFilterDecode);
-BENCHMARK(GCSFilterDecodeSkipCheck);
-BENCHMARK(GCSFilterMatch);
+BENCHMARK(GCSBlockFilterGetHash, benchmark::PriorityLevel::HIGH);
+BENCHMARK(GCSFilterConstruct, benchmark::PriorityLevel::HIGH);
+BENCHMARK(GCSFilterDecode, benchmark::PriorityLevel::HIGH);
+BENCHMARK(GCSFilterDecodeSkipCheck, benchmark::PriorityLevel::HIGH);
+BENCHMARK(GCSFilterMatch, benchmark::PriorityLevel::HIGH);

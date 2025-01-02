@@ -2,11 +2,10 @@
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
-#include <util/bitdeque.h>
-
 #include <random.h>
 #include <test/fuzz/FuzzedDataProvider.h>
 #include <test/fuzz/util.h>
+#include <util/bitdeque.h>
 
 #include <deque>
 #include <vector>
@@ -32,7 +31,7 @@ void InitRandData()
 
 } // namespace
 
-FUZZ_TARGET_INIT(bitdeque, InitRandData)
+FUZZ_TARGET(bitdeque, .init = InitRandData)
 {
     FuzzedDataProvider provider(buffer.data(), buffer.size());
     FastRandomContext ctx(true);
@@ -54,20 +53,11 @@ FUZZ_TARGET_INIT(bitdeque, InitRandData)
         --initlen;
     }
 
-    while (provider.remaining_bytes()) {
-        {
-            assert(deq.size() == bitdeq.size());
-            auto it = deq.begin();
-            auto bitit = bitdeq.begin();
-            auto itend = deq.end();
-            while (it != itend) {
-                assert(*it == *bitit);
-                ++it;
-                ++bitit;
-            }
-        }
-
-        CallOneOf(provider,
+    const auto iter_limit{maxlen > 6000 ? 90U : 900U};
+    LIMITED_WHILE(provider.remaining_bytes() > 0, iter_limit)
+    {
+        CallOneOf(
+            provider,
             [&] {
                 // constructor()
                 deq = std::deque<bool>{};
@@ -535,8 +525,17 @@ FUZZ_TARGET_INIT(bitdeque, InitRandData)
                     assert(it == deq.begin() + before);
                     assert(bitit == bitdeq.begin() + before);
                 }
-            }
-        );
+            });
     }
-
+    {
+        assert(deq.size() == bitdeq.size());
+        auto it = deq.begin();
+        auto bitit = bitdeq.begin();
+        auto itend = deq.end();
+        while (it != itend) {
+            assert(*it == *bitit);
+            ++it;
+            ++bitit;
+        }
+    }
 }

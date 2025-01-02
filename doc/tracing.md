@@ -76,7 +76,7 @@ the passed message.
 
 #### Tracepoint `net:outbound_message`
 
-Is called when a message is send to a peer over the P2P network. Passes
+Is called when a message is sent to a peer over the P2P network. Passes
 information about our peer, the connection and the message as arguments.
 
 Arguments passed:
@@ -106,7 +106,7 @@ Arguments passed:
 3. Transactions in the Block as `uint64`
 4. Inputs spend in the Block as `int32`
 5. SigOps in the Block (excluding coinbase SigOps) `uint64`
-6. Time it took to connect the Block in microseconds (µs) as `uint64`
+6. Time it took to connect the Block in nanoseconds (ns) as `uint64`
 
 ### Context `utxocache`
 
@@ -116,7 +116,7 @@ added to and removed (spent) from the cache when we connect a new block.
 (`chainstate.CoinsTip()`). For example, the RPCs `generateblock` and
 `getblocktemplate` call `TestBlockValidity()`, which applies the UTXO set
 changes to a temporary cache. Similarly, mempool consistency checks, which are
-frequent on regtest, also apply the the UTXO set changes to a temporary cache.
+frequent on regtest, also apply the UTXO set changes to a temporary cache.
 Changes to the _main_ UTXO cache and to temporary caches trigger the tracepoints.
 We can't tell if a temporary cache or the _main_ cache was changed.
 
@@ -211,50 +211,113 @@ Arguments passed:
 4. The expected transaction fee as an `int64`
 5. The position of the change output as an `int32`
 
+### Context `mempool`
+
+#### Tracepoint `mempool:added`
+
+Is called when a transaction is added to the node's mempool. Passes information
+about the transaction.
+
+Arguments passed:
+1. Transaction ID (hash) as `pointer to unsigned chars` (i.e. 32 bytes in little-endian)
+2. Transaction virtual size as `int32`
+3. Transaction fee as `int64`
+
+#### Tracepoint `mempool:removed`
+
+Is called when a transaction is removed from the node's mempool. Passes information
+about the transaction.
+
+Arguments passed:
+1. Transaction ID (hash) as `pointer to unsigned chars` (i.e. 32 bytes in little-endian)
+2. Removal reason as `pointer to C-style String` (max. length 9 characters)
+3. Transaction virtual size as `int32`
+4. Transaction fee as `int64`
+5. Transaction mempool entry time (epoch) as `uint64`
+
+#### Tracepoint `mempool:replaced`
+
+Is called when a transaction in the node's mempool is getting replaced by another.
+Passes information about the replaced and replacement transactions.
+
+Arguments passed:
+1. Replaced transaction ID (hash) as `pointer to unsigned chars` (i.e. 32 bytes in little-endian)
+2. Replaced transaction virtual size as `int32`
+3. Replaced transaction fee as `int64`
+4. Replaced transaction mempool entry time (epoch) as `uint64`
+5. Replacement transaction ID or package hash as `pointer to unsigned chars` (i.e. 32 bytes in little-endian)
+6. Replacement transaction virtual size as `int32`
+7. Replacement transaction fee as `int64`
+8. `bool` indicating if the argument 5. is a transaction ID or package hash (true if it's a transaction ID)
+
+Note: In cases where a replacement transaction or package replaces multiple
+existing transactions in the mempool, the tracepoint is called once for each
+replaced transaction, with data of the replacement transaction or package
+being the same in each call.
+
+#### Tracepoint `mempool:rejected`
+
+Is called when a transaction is not permitted to enter the mempool. Passes
+information about the rejected transaction.
+
+Arguments passed:
+1. Transaction ID (hash) as `pointer to unsigned chars` (i.e. 32 bytes in little-endian)
+2. Reject reason as `pointer to C-style String` (max. length 118 characters)
+
 ## Adding tracepoints to Bitcoin Core
 
-To add a new tracepoint, `#include <util/trace.h>` in the compilation unit where
-the tracepoint is inserted. Use one of the `TRACEx` macros listed below
-depending on the number of arguments passed to the tracepoint. Up to 12
-arguments can be provided. The `context` and `event` specify the names by which
-the tracepoint is referred to. Please use `snake_case` and try to make sure that
-the tracepoint names make sense even without detailed knowledge of the
-implementation details. Do not forget to update the tracepoint list in this
-document.
+Use the `TRACEPOINT` macro to add a new tracepoint. If not yet included, include
+`util/trace.h` (defines the tracepoint macros) with `#include <util/trace.h>`.
+Each tracepoint needs a `context` and an `event`. Please use `snake_case` and
+try to make sure that the tracepoint names make sense even without detailed
+knowledge of the implementation details. You can pass zero to twelve arguments
+to the tracepoint. Each tracepoint also needs a global semaphore. The semaphore
+gates the tracepoint arguments from being processed if we are not attached to
+the tracepoint. Add a `TRACEPOINT_SEMAPHORE(context, event)` with the `context`
+and `event` of your tracepoint in the top-level namespace at the beginning of
+the file. Do not forget to update the tracepoint list in this document.
 
-```c
-#define TRACE(context, event)
-#define TRACE1(context, event, a)
-#define TRACE2(context, event, a, b)
-#define TRACE3(context, event, a, b, c)
-#define TRACE4(context, event, a, b, c, d)
-#define TRACE5(context, event, a, b, c, d, e)
-#define TRACE6(context, event, a, b, c, d, e, f)
-#define TRACE7(context, event, a, b, c, d, e, f, g)
-#define TRACE8(context, event, a, b, c, d, e, f, g, h)
-#define TRACE9(context, event, a, b, c, d, e, f, g, h, i)
-#define TRACE10(context, event, a, b, c, d, e, f, g, h, i, j)
-#define TRACE11(context, event, a, b, c, d, e, f, g, h, i, j, k)
-#define TRACE12(context, event, a, b, c, d, e, f, g, h, i, j, k, l)
-```
-
-For example:
+For example, the `net:outbound_message` tracepoint in `src/net.cpp` with six
+arguments.
 
 ```C++
-TRACE6(net, inbound_message,
-    pnode->GetId(),
-    pnode->m_addr_name.c_str(),
-    pnode->ConnectionTypeAsString().c_str(),
-    sanitizedType.c_str(),
-    msg.data.size(),
-    msg.data.data()
-);
+// src/net.cpp
+TRACEPOINT_SEMAPHORE(net, outbound_message);
+…
+void CConnman::PushMessage(…) {
+  …
+  TRACEPOINT(net, outbound_message,
+      pnode->GetId(),
+      pnode->m_addr_name.c_str(),
+      pnode->ConnectionTypeAsString().c_str(),
+      sanitizedType.c_str(),
+      msg.data.size(),
+      msg.data.data()
+  );
+  …
+}
+```
+If needed, an extra `if (TRACEPOINT_ACTIVE(context, event)) {...}` check can be
+used to prepare somewhat expensive arguments right before the tracepoint. While
+the tracepoint arguments are only prepared when we attach something to the
+tracepoint, an argument preparation should never hang the process. Hashing and
+serialization of data structures is probably fine, a `sleep(10s)` not.
+
+```C++
+// An example tracepoint with an expensive argument.
+
+TRACEPOINT_SEMAPHORE(example, gated_expensive_argument);
+…
+if (TRACEPOINT_ACTIVE(example, gated_expensive_argument)) {
+    expensive_argument = expensive_calulation();
+    TRACEPOINT(example, gated_expensive_argument, expensive_argument);
+}
 ```
 
 ### Guidelines and best practices
 
-#### Clear motivation and use-case
-Tracepoints need a clear motivation and use-case. The motivation should
+#### Clear motivation and use case
+Tracepoints need a clear motivation and use case. The motivation should
 outweigh the impact on, for example, code readability. There is no point in
 adding tracepoints that don't end up being used.
 
@@ -265,12 +328,6 @@ can be kept simple but should give others a starting point when working with
 the tracepoint. See existing examples in [contrib/tracing/].
 
 [contrib/tracing/]: ../contrib/tracing/
-
-#### No expensive computations for tracepoints
-Data passed to the tracepoint should be inexpensive to compute. Although the
-tracepoint itself only has overhead when enabled, the code to compute arguments
-is always run - even if the tracepoint is not used. For example, avoid
-serialization and parsing.
 
 #### Semi-stable API
 Tracepoints should have a semi-stable API. Users should be able to rely on the
@@ -295,7 +352,7 @@ first six argument fields. Binary data can be placed in later arguments. The BCC
 supports reading from all 12 arguments.
 
 #### Strings as C-style String
-Generally, strings should be passed into the `TRACEx` macros as pointers to
+Generally, strings should be passed into the `TRACEPOINT` macros as pointers to
 C-style strings (a null-terminated sequence of characters). For C++
 `std::strings`, [`c_str()`]  can be used. It's recommended to document the
 maximum expected string size if known.
@@ -314,13 +371,13 @@ USDT support.
 To list probes in Bitcoin Core, use `info probes` in `gdb`:
 
 ```
-$ gdb ./src/bitcoind
+$ gdb ./build/src/bitcoind
 …
 (gdb) info probes
 Type Provider   Name             Where              Semaphore Object
-stap net        inbound_message  0x000000000014419e /src/bitcoind
-stap net        outbound_message 0x0000000000107c05 /src/bitcoind
-stap validation block_connected  0x00000000002fb10c /src/bitcoind
+stap net        inbound_message  0x000000000014419e 0x0000000000d29bd2 /build/src/bitcoind
+stap net        outbound_message 0x0000000000107c05 0x0000000000d29bd0 /build/src/bitcoind
+stap validation block_connected  0x00000000002fb10c 0x0000000000d29bd8 /build/src/bitcoind
 …
 ```
 
@@ -330,13 +387,13 @@ The `readelf` tool can be used to display the USDT tracepoints in Bitcoin Core.
 Look for the notes with the description `NT_STAPSDT`.
 
 ```
-$ readelf -n ./src/bitcoind | grep NT_STAPSDT -A 4 -B 2
+$ readelf -n ./build/src/bitcoind | grep NT_STAPSDT -A 4 -B 2
 Displaying notes found in: .note.stapsdt
   Owner                 Data size	Description
   stapsdt              0x0000005d	NT_STAPSDT (SystemTap probe descriptors)
     Provider: net
     Name: outbound_message
-    Location: 0x0000000000107c05, Base: 0x0000000000579c90, Semaphore: 0x0000000000000000
+    Location: 0x0000000000107c05, Base: 0x0000000000579c90, Semaphore: 0x0000000000d29bd0
     Arguments: -8@%r12 8@%rbx 8@%rdi 8@192(%rsp) 8@%rax 8@%rdx
 …
 ```
@@ -354,8 +411,8 @@ between distributions. For example, on
 [ubuntu binary]: https://github.com/iovisor/bcc/blob/master/INSTALL.md#ubuntu---binary
 
 ```
-$ tplist -l ./src/bitcoind -v
-b'net':b'outbound_message' [sema 0x0]
+$ tplist -l ./build/src/bitcoind -v
+b'net':b'outbound_message' [sema 0xd29bd0]
   1 location(s)
   6 argument(s)
 …

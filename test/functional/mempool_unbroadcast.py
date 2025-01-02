@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
-# Copyright (c) 2017-2021 The Bitcoin Core developers
+# Copyright (c) 2017-2022 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test that the mempool ensures transaction delivery by periodically sending
 to peers until a GETDATA is received."""
 
-import time
-
 from test_framework.p2p import P2PTxInvStore
 from test_framework.test_framework import BitcoinTestFramework
-from test_framework.util import assert_equal
+from test_framework.util import (
+    assert_equal,
+    ensure_for,
+)
 from test_framework.wallet import MiniWallet
 
 MAX_INITIAL_BROADCAST_DELAY = 15 * 60 # 15 minutes in seconds
 
 class MempoolUnbroadcastTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser)
+
     def set_test_params(self):
         self.num_nodes = 2
-        if self.is_wallet_compiled():
-            self.requires_wallet = True
 
     def run_test(self):
         self.wallet = MiniWallet(self.nodes[0])
-        self.wallet.rescan_utxos()
         self.test_broadcast()
         self.test_txn_removal()
 
@@ -35,6 +36,7 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
         self.log.info("Generate transactions that only node 0 knows about")
 
         if self.is_wallet_compiled():
+            self.import_deterministic_coinbase_privkeys()
             # generate a wallet txn
             addr = node.getnewaddress()
             wallet_tx_hsh = node.sendtoaddress(addr, 0.0001)
@@ -82,8 +84,8 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
 
         conn = node.add_p2p_connection(P2PTxInvStore())
         node.mockscheduler(MAX_INITIAL_BROADCAST_DELAY)
-        time.sleep(2) # allow sufficient time for possibility of broadcast
-        assert_equal(len(conn.get_invs()), 0)
+        # allow sufficient time for possibility of broadcast
+        ensure_for(duration=2, f=lambda: len(conn.get_invs()) == 0)
 
         self.disconnect_nodes(0, 1)
         node.disconnect_p2ps()
@@ -108,4 +110,4 @@ class MempoolUnbroadcastTest(BitcoinTestFramework):
 
 
 if __name__ == "__main__":
-    MempoolUnbroadcastTest().main()
+    MempoolUnbroadcastTest(__file__).main()

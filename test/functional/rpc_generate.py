@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-# Copyright (c) 2020-2021 The Bitcoin Core developers
+# Copyright (c) 2020-present The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test generate* RPCs."""
+
+from concurrent.futures import ThreadPoolExecutor
 
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.wallet import MiniWallet
@@ -28,10 +30,14 @@ class RPCGenerateTest(BitcoinTestFramework):
     def test_generateblock(self):
         node = self.nodes[0]
         miniwallet = MiniWallet(node)
-        miniwallet.rescan_utxos()
+
+        self.log.info('Mine an empty block to address and return the hex')
+        address = miniwallet.get_address()
+        generated_block = self.generateblock(node, output=address, transactions=[], submit=False)
+        node.submitblock(hexdata=generated_block['hex'])
+        assert_equal(generated_block['hash'], node.getbestblockhash())
 
         self.log.info('Generate an empty block to address')
-        address = miniwallet.get_address()
         hash = self.generateblock(node, output=address, transactions=[])['hash']
         block = node.getblock(blockhash=hash, verbose=2)
         assert_equal(len(block['tx']), 1)
@@ -79,6 +85,13 @@ class RPCGenerateTest(BitcoinTestFramework):
         txid = block['tx'][1]
         assert_equal(node.getrawtransaction(txid=txid, verbose=False, blockhash=hash), rawtx)
 
+        # Ensure that generateblock can be called concurrently by many threads.
+        self.log.info('Generate blocks in parallel')
+        generate_50_blocks = lambda n: [n.generateblock(output=address, transactions=[]) for _ in range(50)]
+        rpcs = [node.cli for _ in range(6)]
+        with ThreadPoolExecutor(max_workers=len(rpcs)) as threads:
+            list(threads.map(generate_50_blocks, rpcs))
+
         self.log.info('Fail to generate block with out of order txs')
         txid1 = miniwallet.send_self_transfer(from_node=node)['txid']
         utxo1 = miniwallet.get_utxo(txid=txid1)
@@ -122,4 +135,4 @@ class RPCGenerateTest(BitcoinTestFramework):
 
 
 if __name__ == "__main__":
-    RPCGenerateTest().main()
+    RPCGenerateTest(__file__).main()

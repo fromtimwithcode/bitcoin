@@ -20,6 +20,9 @@ CHALLENGE_PRIVATE_KEY = (42).to_bytes(32, 'big')
 
 
 class SignetMinerTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser)
+
     def set_test_params(self):
         self.chain = "signet"
         self.setup_clean_chain = True
@@ -54,9 +57,10 @@ class SignetMinerTest(BitcoinTestFramework):
                 f'--grind-cmd={self.options.bitcoinutil} grind',
                 '--nbits=1d00ffff',
                 f'--set-block-time={int(time.time())}',
+                '--poolnum=99',
             ], check=True, stderr=subprocess.STDOUT)
         assert_equal(node.getblockcount(), 1)
 
 
 if __name__ == "__main__":
-    SignetMinerTest().main()
+    SignetMinerTest(__file__).main()

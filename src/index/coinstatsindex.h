@@ -1,4 +1,4 @@
-// Copyright (c) 2020-2021 The Bitcoin Core developers
+// Copyright (c) 2020-2022 The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -14,13 +14,14 @@ namespace kernel {
 struct CCoinsStats;
 }
 
+static constexpr bool DEFAULT_COINSTATSINDEX{false};
+
 /**
  * CoinStatsIndex maintains statistics on the UTXO set.
  */
 class CoinStatsIndex final : public BaseIndex
 {
 private:
-    std::string m_name;
     std::unique_ptr<BaseIndex::DB> m_db;
 
     MuHash3072 m_muhash;
@@ -37,22 +38,20 @@ private:
     CAmount m_total_unspendables_scripts{0};
     CAmount m_total_unspendables_unclaimed_rewards{0};
 
-    bool ReverseBlock(const CBlock& block, const CBlockIndex* pindex);
+    [[nodiscard]] bool ReverseBlock(const CBlock& block, const CBlockIndex* pindex);
 
     bool AllowPrune() const override { return true; }
 
 protected:
-    bool CustomInit(const std::optional<interfaces::BlockKey>& block) override;
+    bool CustomInit(const std::optional<interfaces::BlockRef>& block) override;
 
     bool CustomCommit(CDBBatch& batch) override;
 
     bool CustomAppend(const interfaces::BlockInfo& block) override;
 
-    bool CustomRewind(const interfaces::BlockKey& current_tip, const interfaces::BlockKey& new_tip) override;
+    bool CustomRewind(const interfaces::BlockRef& current_tip, const interfaces::BlockRef& new_tip) override;
 
     BaseIndex::DB& GetDB() const override { return *m_db; }
-
-    const char* GetName() const override { return "coinstatsindex"; }
 
 public:
     // Constructs the index, which becomes available to be queried.

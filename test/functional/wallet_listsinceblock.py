@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# Copyright (c) 2017-2021 The Bitcoin Core developers
+# Copyright (c) 2017-2022 The Bitcoin Core developers
 # Distributed under the MIT software license, see the accompanying
 # file COPYING or http://www.opensource.org/licenses/mit-license.php.
 """Test the listsinceblock RPC."""
@@ -7,7 +7,6 @@
 from test_framework.address import key_to_p2wpkh
 from test_framework.blocktools import COINBASE_MATURITY
 from test_framework.descriptors import descsum_create
-from test_framework.key import ECKey
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.messages import MAX_BIP125_RBF_SEQUENCE
 from test_framework.util import (
@@ -15,16 +14,19 @@ from test_framework.util import (
     assert_equal,
     assert_raises_rpc_error,
 )
-from test_framework.wallet_util import bytes_to_wif
+from test_framework.wallet_util import generate_keypair
 
 from decimal import Decimal
 
 class ListSinceBlockTest(BitcoinTestFramework):
+    def add_options(self, parser):
+        self.add_wallet_options(parser)
+
     def set_test_params(self):
         self.num_nodes = 4
         self.setup_clean_chain = True
         # whitelist peers to speed up tx relay / mempool sync
-        self.extra_args = [["-whitelist=noban@127.0.0.1"]] * self.num_nodes
+        self.noban_tx_relay = True
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
@@ -38,6 +40,7 @@ class ListSinceBlockTest(BitcoinTestFramework):
         self.test_no_blockhash()
         self.test_invalid_blockhash()
         self.test_reorg()
+        self.test_cant_read_block()
         self.test_double_spend()
         self.test_double_send()
         self.double_spends_filtered()
@@ -45,6 +48,8 @@ class ListSinceBlockTest(BitcoinTestFramework):
         if self.options.descriptors:
             self.test_desc()
         self.test_send_to_self()
+        self.test_op_return()
+        self.test_label()
 
     def test_no_blockhash(self):
         self.log.info("Test no blockhash")
@@ -163,6 +168,31 @@ class ListSinceBlockTest(BitcoinTestFramework):
         found = next(tx for tx in transactions if tx['txid'] == senttx)
         assert_equal(found['blockheight'], self.nodes[0].getblockheader(nodes2_first_blockhash)['height'])
 
+    def test_cant_read_block(self):
+        self.log.info('Test the RPC error "Can\'t read block from disk"')
+
+        # Split network into two
+        self.split_network()
+
+        # generate on both sides
+        nodes1_last_blockhash = self.generate(self.nodes[1], 6, sync_fun=lambda: self.sync_all(self.nodes[:2]))[-1]
+        self.generate(self.nodes[2], 7, sync_fun=lambda: self.sync_all(self.nodes[2:]))[0]
+
+        self.join_network()
+
+        # Renaming the block file to induce unsuccessful block read
+        blk_dat = (self.nodes[0].blocks_path / "blk00000.dat")
+        blk_dat_moved = blk_dat.rename(self.nodes[0].blocks_path / "blk00000.dat.moved")
+        assert not blk_dat.exists()
+
+        # listsinceblock(nodes1_last_blockhash) should now fail as blocks are not accessible
+        assert_raises_rpc_error(-32603, "Can't read block from disk",
+            self.nodes[0].listsinceblock, nodes1_last_blockhash)
+
+        # Restoring block file
+        blk_dat_moved.rename(self.nodes[0].blocks_path / "blk00000.dat")
+        assert blk_dat.exists()
+
     def test_double_spend(self):
         '''
         This tests the case where the same UTXO is spent twice on two separate
@@ -197,10 +227,8 @@ class ListSinceBlockTest(BitcoinTestFramework):
         self.sync_all()
 
         # share utxo between nodes[1] and nodes[2]
-        eckey = ECKey()
-        eckey.generate()
-        privkey = bytes_to_wif(eckey.get_bytes())
-        address = key_to_p2wpkh(eckey.get_pubkey().get_bytes())
+        privkey, pubkey = generate_keypair(wif=True)
+        address = key_to_p2wpkh(pubkey)
         self.nodes[2].sendtoaddress(address, 10)
         self.generate(self.nodes[2], 6)
         self.nodes[2].importprivkey(privkey)
@@ -448,6 +476,33 @@ class ListSinceBlockTest(BitcoinTestFramework):
         assert any(c["address"] == addr for c in coins)
         assert all(self.nodes[2].getaddressinfo(c["address"])["ischange"] for c in coins)
 
+    def test_op_return(self):
+        """Test if OP_RETURN outputs will be displayed correctly."""
+        block_hash = self.nodes[2].getbestblockhash()
+
+        raw_tx = self.nodes[2].createrawtransaction([], [{'data': 'aa'}])
+        funded_tx = self.nodes[2].fundrawtransaction(raw_tx)
+        signed_tx = self.nodes[2].signrawtransactionwithwallet(funded_tx['hex'])
+        tx_id = self.nodes[2].sendrawtransaction(signed_tx['hex'])
+
+        op_ret_tx = [tx for tx in self.nodes[2].listsinceblock(blockhash=block_hash)["transactions"] if tx['txid'] == tx_id][0]
+
+        assert 'address' not in op_ret_tx
+
+    def test_label(self):
+        self.log.info('Test passing "label" argument fetches incoming transactions having the specified label')
+        new_addr = self.nodes[1].getnewaddress(label="new_addr", address_type="bech32")
+
+        self.nodes[2].sendtoaddress(address=new_addr, amount="0.001")
+        self.generate(self.nodes[2], 1)
+
+        for label in ["new_addr", ""]:
+            new_addr_transactions = self.nodes[1].listsinceblock(label=label)["transactions"]
+            assert_equal(len(new_addr_transactions), 1)
+            assert_equal(new_addr_transactions[0]["label"], label)
+            if label == "new_addr":
+                assert_equal(new_addr_transactions[0]["address"], new_addr)
+
 
 if __name__ == '__main__':
-    ListSinceBlockTest().main()
+    ListSinceBlockTest(__file__).main()
