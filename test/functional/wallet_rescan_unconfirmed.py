@@ -16,15 +16,11 @@ from test_framework.wallet_util import test_address
 
 
 class WalletRescanUnconfirmed(BitcoinTestFramework):
-    def add_options(self, parser):
-        self.add_wallet_options(parser, legacy=False)
-
     def set_test_params(self):
         self.num_nodes = 1
 
     def skip_test_if_missing_module(self):
         self.skip_if_no_wallet()
-        self.skip_if_no_sqlite()
 
     def run_test(self):
         self.log.info("Create wallets and mine initial chain")
@@ -57,7 +53,7 @@ class WalletRescanUnconfirmed(BitcoinTestFramework):
         # The only UTXO available to spend is tx_parent_to_reorg.
         assert_equal(len(w0_utxos), 1)
         assert_equal(w0_utxos[0]["txid"], tx_parent_to_reorg["txid"])
-        tx_child_unconfirmed_sweep = w0.sendall([ADDRESS_BCRT1_UNSPENDABLE])
+        tx_child_unconfirmed_sweep = w0.sendall(recipients=[ADDRESS_BCRT1_UNSPENDABLE], options={"locktime":0})
         assert tx_child_unconfirmed_sweep["txid"] in node.getrawmempool()
         node.syncwithvalidationinterfacequeue()
 
@@ -66,7 +62,8 @@ class WalletRescanUnconfirmed(BitcoinTestFramework):
         assert tx_parent_to_reorg["txid"] in node.getrawmempool()
 
         self.log.info("Import descriptor wallet on another node")
-        descriptors_to_import = [{"desc": w0.getaddressinfo(parent_address)['parent_desc'], "timestamp": 0, "label": "w0 import"}]
+        # descriptor is ranged - label not allowed
+        descriptors_to_import = [{"desc": w0.getaddressinfo(parent_address)['parent_desc'], "timestamp": 0}]
 
         node.createwallet(wallet_name="w1", disable_private_keys=True)
         w1 = node.get_wallet_rpc("w1")

@@ -16,24 +16,12 @@
 
 #include <cstdint>
 #include <iterator>
-#include <map>
 #include <memory>
 #include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
 #include <vector>
-
-typedef std::map<int, uint256> MapCheckpoints;
-
-struct CCheckpointData {
-    MapCheckpoints mapCheckpoints;
-
-    int GetHeight() const {
-        const auto& final_checkpoint = mapCheckpoints.rbegin();
-        return final_checkpoint->first /* height */;
-    }
-};
 
 struct AssumeutxoHash : public BaseHash<uint256> {
     explicit AssumeutxoHash(const uint256& hash) : BaseHash(hash) {}
@@ -71,6 +59,15 @@ struct ChainTxData {
     int64_t nTime;    //!< UNIX timestamp of last known number of transactions
     uint64_t tx_count; //!< total number of transactions between genesis and that timestamp
     double dTxRate;   //!< estimated number of transactions per second after that timestamp
+};
+
+//! Configuration for headers sync memory usage.
+struct HeadersSyncParams {
+    //! Distance in blocks between header commitments.
+    size_t commitment_period{0};
+    //! Minimum number of validated headers to accumulate in the redownload
+    //! buffer before feeding them into the permanent block index.
+    size_t redownload_buffer_size{0};
 };
 
 /**
@@ -118,7 +115,7 @@ public:
     const std::vector<unsigned char>& Base58Prefix(Base58Type type) const { return base58Prefixes[type]; }
     const std::string& Bech32HRP() const { return bech32_hrp; }
     const std::vector<uint8_t>& FixedSeeds() const { return vFixedSeeds; }
-    const CCheckpointData& Checkpoints() const { return checkpointData; }
+    const HeadersSyncParams& HeadersSync() const { return m_headers_sync_params; }
 
     std::optional<AssumeutxoData> AssumeutxoForHeight(int height) const
     {
@@ -181,9 +178,9 @@ protected:
     std::vector<uint8_t> vFixedSeeds;
     bool fDefaultConsistencyChecks;
     bool m_is_mockable_chain;
-    CCheckpointData checkpointData;
     std::vector<AssumeutxoData> m_assumeutxo_data;
     ChainTxData chainTxData;
+    HeadersSyncParams m_headers_sync_params;
 };
 
 std::optional<ChainType> GetNetworkForMagic(const MessageStartChars& pchMessageStart);

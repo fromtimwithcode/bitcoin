@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <ranges>
 #include <utility>
 
 namespace node {
@@ -27,7 +28,7 @@ MiniMiner::MiniMiner(const CTxMemPool& mempool, const std::vector<COutPoint>& ou
     // Anything that's spent by the mempool is to-be-replaced
     // Anything otherwise unavailable just has a bump fee of 0
     for (const auto& outpoint : outpoints) {
-        if (!mempool.exists(GenTxid::Txid(outpoint.hash))) {
+        if (!mempool.exists(outpoint.hash)) {
             // This UTXO is either confirmed or not yet submitted to mempool.
             // If it's confirmed, no bump fee is required.
             // If it's not yet submitted, we have no information, so return 0.
@@ -61,12 +62,8 @@ MiniMiner::MiniMiner(const CTxMemPool& mempool, const std::vector<COutPoint>& ou
     if (m_requested_outpoints_by_txid.empty()) return;
 
     // Calculate the cluster and construct the entry map.
-    std::vector<uint256> txids_needed;
-    txids_needed.reserve(m_requested_outpoints_by_txid.size());
-    for (const auto& [txid, _]: m_requested_outpoints_by_txid) {
-        txids_needed.push_back(txid);
-    }
-    const auto cluster = mempool.GatherClusters(txids_needed);
+    auto txids_needed{m_requested_outpoints_by_txid | std::views::keys};
+    const auto cluster = mempool.GatherClusters({txids_needed.begin(), txids_needed.end()});
     if (cluster.empty()) {
         // An empty cluster means that at least one of the transactions is missing from the mempool
         // (should not be possible given processing above) or DoS limit was hit.
@@ -77,12 +74,13 @@ MiniMiner::MiniMiner(const CTxMemPool& mempool, const std::vector<COutPoint>& ou
     // Add every entry to m_entries_by_txid and m_entries, except the ones that will be replaced.
     for (const auto& txiter : cluster) {
         if (!m_to_be_replaced.count(txiter->GetTx().GetHash())) {
+            auto [ancestor_count, ancestor_size, ancestor_fee] = mempool.CalculateAncestorData(*txiter);
             auto [mapiter, success] = m_entries_by_txid.emplace(txiter->GetTx().GetHash(),
                 MiniMinerMempoolEntry{/*tx_in=*/txiter->GetSharedTx(),
                                       /*vsize_self=*/txiter->GetTxSize(),
-                                      /*vsize_ancestor=*/txiter->GetSizeWithAncestors(),
+                                      /*vsize_ancestor=*/int64_t(ancestor_size),
                                       /*fee_self=*/txiter->GetModifiedFee(),
-                                      /*fee_ancestor=*/txiter->GetModFeesWithAncestors()});
+                                      /*fee_ancestor=*/ancestor_fee});
             m_entries.push_back(mapiter);
         } else {
             auto outpoints_it = m_requested_outpoints_by_txid.find(txiter->GetTx().GetHash());
@@ -286,7 +284,7 @@ void MiniMiner::BuildMockTemplate(std::optional<CFeeRate> target_feerate)
         }
         // Track the order in which transactions were selected.
         for (const auto& ancestor : ancestors) {
-            m_inclusion_order.emplace(Txid::FromUint256(ancestor->first), sequence_num);
+            m_inclusion_order.emplace(ancestor->first, sequence_num);
         }
         DeleteAncestorPackage(ancestors);
         SanityCheck();
@@ -409,7 +407,7 @@ std::optional<CAmount> MiniMiner::CalculateTotalBumpFees(const CFeeRate& target_
         ancestors.insert(iter);
     }
 
-    std::set<uint256> has_been_processed;
+    std::set<Txid> has_been_processed;
     while (!to_process.empty()) {
         auto iter = to_process.begin();
         const CTransaction& tx = (*iter)->second.GetTx();

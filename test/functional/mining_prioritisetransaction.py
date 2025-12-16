@@ -13,6 +13,7 @@ from test_framework.messages import (
 )
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.util import (
+    assert_not_equal,
     assert_equal,
     assert_raises_rpc_error,
     create_lots_of_big_transactions,
@@ -26,7 +27,6 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.num_nodes = 1
         self.extra_args = [[
             "-printpriority=1",
-            "-datacarriersize=100000",
         ]] * self.num_nodes
         self.supports_cli = False
 
@@ -101,14 +101,21 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.nodes[0].prioritisetransaction(txid=txid_c, fee_delta=int(fee_delta_c_1 * COIN))
         self.nodes[0].prioritisetransaction(txid=txid_c, fee_delta=int(fee_delta_c_2 * COIN))
         raw_before[txid_a]["fees"]["descendant"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
+        # We expect tx_a to have a chunk fee that includes tx_b and tx_c.
+        raw_before[txid_a]["fees"]["chunk"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_b]["fees"]["modified"] += fee_delta_b
         raw_before[txid_b]["fees"]["ancestor"] += fee_delta_b
         raw_before[txid_b]["fees"]["descendant"] += fee_delta_b
+        # We also expect tx_b and tx_c to have their chunk fees modified too,
+        # since they chunk together.
+        raw_before[txid_b]["fees"]["chunk"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_c]["fees"]["modified"] += fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_c]["fees"]["ancestor"] += fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_c]["fees"]["descendant"] += fee_delta_c_1 + fee_delta_c_2
+        raw_before[txid_c]["fees"]["chunk"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_before[txid_d]["fees"]["ancestor"] += fee_delta_b + fee_delta_c_1 + fee_delta_c_2
         raw_after = self.nodes[0].getrawmempool(verbose=True)
+        # Don't bother comparing cluster ids, which are not meant to be stable.
         assert_equal(raw_before[txid_a], raw_after[txid_a])
         assert_equal(raw_before, raw_after)
         assert_equal(self.nodes[0].getprioritisedtransactions(), {txid_b: {"fee_delta" : fee_delta_b*COIN, "in_mempool" : True, "modified_fee": int(fee_delta_b*COIN + COIN * tx_o_b["fee"])}, txid_c: {"fee_delta" : (fee_delta_c_1 + fee_delta_c_2)*COIN, "in_mempool" : True, "modified_fee": int((fee_delta_c_1 + fee_delta_c_2 ) * COIN + COIN * tx_o_c["fee"])}})
@@ -302,7 +309,7 @@ class PrioritiseTransactionTest(BitcoinTestFramework):
         self.nodes[0].setmocktime(mock_time+10)
         new_template = self.nodes[0].getblocktemplate({'rules': ['segwit']})
 
-        assert template != new_template
+        assert_not_equal(template, new_template)
 
 if __name__ == '__main__':
     PrioritiseTransactionTest(__file__).main()

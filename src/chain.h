@@ -35,6 +35,9 @@ static constexpr int64_t MAX_FUTURE_BLOCK_TIME = 2 * 60 * 60;
  * MAX_FUTURE_BLOCK_TIME.
  */
 static constexpr int64_t TIMESTAMP_WINDOW = MAX_FUTURE_BLOCK_TIME;
+//! Init values for CBlockIndex nSequenceId when loaded from disk
+static constexpr int32_t SEQ_ID_BEST_CHAIN_FROM_DISK = 0;
+static constexpr int32_t SEQ_ID_INIT_FROM_DISK = 1;
 
 /**
  * Maximum gap between node time and block time used
@@ -44,47 +47,6 @@ static constexpr int64_t TIMESTAMP_WINDOW = MAX_FUTURE_BLOCK_TIME;
  */
 static constexpr int64_t MAX_BLOCK_TIME_GAP = 90 * 60;
 
-class CBlockFileInfo
-{
-public:
-    unsigned int nBlocks{};      //!< number of blocks stored in file
-    unsigned int nSize{};        //!< number of used bytes of block file
-    unsigned int nUndoSize{};    //!< number of used bytes in the undo file
-    unsigned int nHeightFirst{}; //!< lowest height of block in file
-    unsigned int nHeightLast{};  //!< highest height of block in file
-    uint64_t nTimeFirst{};       //!< earliest time of block in file
-    uint64_t nTimeLast{};        //!< latest time of block in file
-
-    SERIALIZE_METHODS(CBlockFileInfo, obj)
-    {
-        READWRITE(VARINT(obj.nBlocks));
-        READWRITE(VARINT(obj.nSize));
-        READWRITE(VARINT(obj.nUndoSize));
-        READWRITE(VARINT(obj.nHeightFirst));
-        READWRITE(VARINT(obj.nHeightLast));
-        READWRITE(VARINT(obj.nTimeFirst));
-        READWRITE(VARINT(obj.nTimeLast));
-    }
-
-    CBlockFileInfo() = default;
-
-    std::string ToString() const;
-
-    /** update statistics (does not update nSize) */
-    void AddBlock(unsigned int nHeightIn, uint64_t nTimeIn)
-    {
-        if (nBlocks == 0 || nHeightFirst > nHeightIn)
-            nHeightFirst = nHeightIn;
-        if (nBlocks == 0 || nTimeFirst > nTimeIn)
-            nTimeFirst = nTimeIn;
-        nBlocks++;
-        if (nHeightIn > nHeightLast)
-            nHeightLast = nHeightIn;
-        if (nTimeIn > nTimeLast)
-            nTimeLast = nTimeIn;
-    }
-};
-
 enum BlockStatus : uint32_t {
     //! Unused.
     BLOCK_VALID_UNKNOWN      =    0,
@@ -92,7 +54,7 @@ enum BlockStatus : uint32_t {
     //! Reserved (was BLOCK_VALID_HEADER).
     BLOCK_VALID_RESERVED     =    1,
 
-    //! All parent headers found, difficulty matches, timestamp >= median previous, checkpoint. Implies all parents
+    //! All parent headers found, difficulty matches, timestamp >= median previous. Implies all parents
     //! are also at least TREE.
     BLOCK_VALID_TREE         =    2,
 
@@ -191,7 +153,9 @@ public:
     uint32_t nNonce{0};
 
     //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
-    int32_t nSequenceId{0};
+    //! Initialized to SEQ_ID_INIT_FROM_DISK{1} when loading blocks from disk, except for blocks
+    //! belonging to the best chain which overwrite it to SEQ_ID_BEST_CHAIN_FROM_DISK{0}.
+    int32_t nSequenceId{SEQ_ID_INIT_FROM_DISK};
 
     //! (memory only) Maximum nTime in the chain up to and including this block.
     unsigned int nTimeMax{0};
@@ -292,7 +256,7 @@ public:
     std::string ToString() const;
 
     //! Check whether this block index entry is valid up to the passed validity level.
-    bool IsValid(enum BlockStatus nUpTo = BLOCK_VALID_TRANSACTIONS) const
+    bool IsValid(enum BlockStatus nUpTo) const
         EXCLUSIVE_LOCKS_REQUIRED(::cs_main)
     {
         AssertLockHeld(::cs_main);
@@ -466,9 +430,6 @@ public:
 
     /** Set/initialize a chain with a given tip. */
     void SetTip(CBlockIndex& block);
-
-    /** Return a CBlockLocator that refers to the tip in of this chain. */
-    CBlockLocator GetLocator() const;
 
     /** Find the last common block between this chain and a block index entry. */
     const CBlockIndex* FindFork(const CBlockIndex* pindex) const;

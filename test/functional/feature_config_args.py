@@ -11,21 +11,23 @@ import re
 import tempfile
 import time
 
+from test_framework.netutil import UNREACHABLE_PROXY_ARG
 from test_framework.test_framework import BitcoinTestFramework
 from test_framework.test_node import ErrorMatch
 from test_framework import util
 
 
 class ConfArgsTest(BitcoinTestFramework):
-    def add_options(self, parser):
-        self.add_wallet_options(parser)
-
     def set_test_params(self):
         self.setup_clean_chain = True
         self.num_nodes = 1
+        # Prune to prevent disk space warning on CI systems with limited space,
+        # when using networks other than regtest.
+        self.extra_args = [["-prune=550"]]
         self.supports_cli = False
         self.wallet_names = []
         self.disable_autoconnect = False
+        self.uses_wallet = None
 
     # Overridden to avoid attempt to sync not yet started nodes.
     def setup_network(self):
@@ -53,7 +55,7 @@ class ConfArgsTest(BitcoinTestFramework):
         os.rename(conf_path.with_suffix('.confbkp'), conf_path)
 
         self.log.debug('Verifying includeconf directive pointing to directory is caught')
-        with open(conf_path, 'a', encoding='utf-8') as conf:
+        with open(conf_path, 'a') as conf:
             conf.write(f'includeconf={self.nodes[0].datadir_path}\n')
         self.nodes[0].assert_start_raises_init_error(
             extra_args=['-regtest'],
@@ -66,12 +68,12 @@ class ConfArgsTest(BitcoinTestFramework):
         self.log.info('Disabling configuration via -noconf')
 
         conf_path = self.nodes[0].datadir_path / 'bitcoin.conf'
-        with open(conf_path, encoding='utf-8') as conf:
+        with open(conf_path) as conf:
             settings = [f'-{line.rstrip()}' for line in conf if len(line) > 1 and line[0] != '[']
         os.rename(conf_path, conf_path.with_suffix('.confbkp'))
 
         self.log.debug('Verifying garbage in config can be detected')
-        with open(conf_path, 'a', encoding='utf-8') as conf:
+        with open(conf_path, 'a') as conf:
             conf.write('garbage\n')
         self.nodes[0].assert_start_raises_init_error(
             extra_args=['-regtest'],
@@ -80,7 +82,7 @@ class ConfArgsTest(BitcoinTestFramework):
 
         self.log.debug('Verifying that disabling of the config file means garbage inside of it does ' \
             'not prevent the node from starting, and message about existing config file is logged')
-        ignored_file_message = [f'[InitConfig] Data directory "{self.nodes[0].datadir_path}" contains a "bitcoin.conf" file which is explicitly ignored using -noconf.']
+        ignored_file_message = [f'Data directory "{self.nodes[0].datadir_path}" contains a "bitcoin.conf" file which is explicitly ignored using -noconf.']
         with self.nodes[0].assert_debug_log(timeout=60, expected_msgs=ignored_file_message):
             self.start_node(0, extra_args=settings + ['-noconf'])
         self.stop_node(0)
@@ -105,9 +107,9 @@ class ConfArgsTest(BitcoinTestFramework):
             expected_msg=conf_in_config_file_err,
         )
         inc_conf_file_path = self.nodes[0].datadir_path / 'include.conf'
-        with open(self.nodes[0].datadir_path / 'bitcoin.conf', 'a', encoding='utf-8') as conf:
+        with open(self.nodes[0].datadir_path / 'bitcoin.conf', 'a') as conf:
             conf.write(f'includeconf={inc_conf_file_path}\n')
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('conf=some.conf\n')
         self.nodes[0].assert_start_raises_init_error(
             expected_msg=conf_in_config_file_err,
@@ -117,65 +119,65 @@ class ConfArgsTest(BitcoinTestFramework):
             expected_msg='Error: Error parsing command line arguments: Invalid parameter -dash_cli=1',
             extra_args=['-dash_cli=1'],
         )
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('dash_conf=1\n')
 
         with self.nodes[0].assert_debug_log(expected_msgs=['Ignoring unknown configuration value dash_conf']):
             self.start_node(0)
         self.stop_node(0)
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('reindex=1\n')
 
-        with self.nodes[0].assert_debug_log(expected_msgs=['Warning: reindex=1 is set in the configuration file, which will significantly slow down startup. Consider removing or commenting out this option for better performance, unless there is currently a condition which makes rebuilding the indexes necessary']):
+        with self.nodes[0].assert_debug_log(expected_msgs=["[warning] reindex=1 is set in the configuration file, which will significantly slow down startup. Consider removing or commenting out this option for better performance, unless there is currently a condition which makes rebuilding the indexes necessary"]):
             self.start_node(0)
         self.stop_node(0)
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('-dash=1\n')
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 1: -dash=1, options in configuration file must be specified without leading -')
 
         if self.is_wallet_compiled():
-            with open(inc_conf_file_path, 'w', encoding='utf8') as conf:
+            with open(inc_conf_file_path, 'w') as conf:
                 conf.write("wallet=foo\n")
             self.nodes[0].assert_start_raises_init_error(expected_msg=f'Error: Config setting for -wallet only applied on {self.chain} network when in [{self.chain}] section.')
 
         main_conf_file_path = self.nodes[0].datadir_path / "bitcoin_main.conf"
         util.write_config(main_conf_file_path, n=0, chain='', extra_config=f'includeconf={inc_conf_file_path}\n')
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('acceptnonstdtxn=1\n')
         self.nodes[0].assert_start_raises_init_error(extra_args=[f"-conf={main_conf_file_path}", "-allowignoredconf"], expected_msg='Error: acceptnonstdtxn is not currently supported for main chain')
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('nono\n')
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 1: nono, if you intended to specify a negated option, use nono=1 instead')
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('server=1\nrpcuser=someuser\nrpcpassword=some#pass')
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 3, using # in rpcpassword can be ambiguous and should be avoided')
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('server=1\nrpcuser=someuser\nmain.rpcpassword=some#pass')
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 3, using # in rpcpassword can be ambiguous and should be avoided')
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('server=1\nrpcuser=someuser\n[main]\nrpcpassword=some#pass')
         self.nodes[0].assert_start_raises_init_error(expected_msg='Error: Error reading configuration file: parse error on line 4, using # in rpcpassword can be ambiguous and should be avoided')
 
         inc_conf_file2_path = self.nodes[0].datadir_path / 'include2.conf'
-        with open(self.nodes[0].datadir_path / 'bitcoin.conf', 'a', encoding='utf-8') as conf:
+        with open(self.nodes[0].datadir_path / 'bitcoin.conf', 'a') as conf:
             conf.write(f'includeconf={inc_conf_file2_path}\n')
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('testnot.datadir=1\n')
-        with open(inc_conf_file2_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file2_path, 'w') as conf:
             conf.write('[testnet]\n')
         self.restart_node(0)
         self.nodes[0].stop_node(expected_stderr=f'Warning: {inc_conf_file_path}:1 Section [testnot] is not recognized.{os.linesep}{inc_conf_file2_path}:1 Section [testnet] is not recognized.')
 
-        with open(inc_conf_file_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file_path, 'w') as conf:
             conf.write('')  # clear
-        with open(inc_conf_file2_path, 'w', encoding='utf-8') as conf:
+        with open(inc_conf_file2_path, 'w') as conf:
             conf.write('')  # clear
 
     def test_config_file_log(self):
@@ -227,8 +229,8 @@ class ConfArgsTest(BitcoinTestFramework):
                 )
 
     def test_log_buffer(self):
-        with self.nodes[0].assert_debug_log(expected_msgs=['Warning: parsed potentially confusing double-negative -connect=0\n']):
-            self.start_node(0, extra_args=['-noconnect=0'])
+        with self.nodes[0].assert_debug_log(expected_msgs=["[warning] Parsed potentially confusing double-negative -listen=0\n"]):
+            self.start_node(0, extra_args=['-nolisten=0'])
         self.stop_node(0)
 
     def test_args_log(self):
@@ -259,6 +261,7 @@ class ConfArgsTest(BitcoinTestFramework):
                 '-rpcpassword=',
                 '-rpcuser=secret-rpcuser',
                 '-torpassword=secret-torpassword',
+                UNREACHABLE_PROXY_ARG,
             ])
         self.stop_node(0)
 
@@ -307,7 +310,7 @@ class ConfArgsTest(BitcoinTestFramework):
                 ],
                 timeout=10,
         ):
-            self.start_node(0, extra_args=['-dnsseed=1', '-fixedseeds=1', f'-mocktime={start}'])
+            self.start_node(0, extra_args=['-dnsseed=1', '-fixedseeds=1', f'-mocktime={start}', UNREACHABLE_PROXY_ARG])
 
         # Only regtest has no fixed seeds. To avoid connections to random
         # nodes, regtest is the only network where it is safe to enable
@@ -355,7 +358,7 @@ class ConfArgsTest(BitcoinTestFramework):
                 ],
                 timeout=10,
         ):
-            self.start_node(0, extra_args=['-dnsseed=0', '-fixedseeds=1', '-addnode=fakenodeaddr', f'-mocktime={start}'])
+            self.start_node(0, extra_args=['-dnsseed=0', '-fixedseeds=1', '-addnode=fakenodeaddr', f'-mocktime={start}', UNREACHABLE_PROXY_ARG])
         with self.nodes[0].assert_debug_log(expected_msgs=[
                 "Adding fixed seeds as 60 seconds have passed and addrman is empty",
         ]):
@@ -367,22 +370,24 @@ class ConfArgsTest(BitcoinTestFramework):
         seednode_ignored = ['-seednode is ignored when -connect is used\n']
         dnsseed_ignored = ['-dnsseed is ignored when -connect is used and -proxy is specified\n']
         addcon_thread_started = ['addcon thread start\n']
+        dnsseed_disabled = "parameter interaction: -connect or -maxconnections=0 set -> setting -dnsseed=0"
+        listen_disabled = "parameter interaction: -connect or -maxconnections=0 set -> setting -listen=0"
 
         # When -connect is supplied, expanding addrman via getaddr calls to ADDR_FETCH(-seednode)
         # nodes is irrelevant and -seednode is ignored.
         with self.nodes[0].assert_debug_log(expected_msgs=seednode_ignored):
-            self.start_node(0, extra_args=['-connect=fakeaddress1', '-seednode=fakeaddress2'])
+            self.start_node(0, extra_args=['-connect=fakeaddress1', '-seednode=fakeaddress2', UNREACHABLE_PROXY_ARG])
 
         # With -proxy, an ADDR_FETCH connection is made to a peer that the dns seed resolves to.
         # ADDR_FETCH connections are not used when -connect is used.
         with self.nodes[0].assert_debug_log(expected_msgs=dnsseed_ignored):
-            self.restart_node(0, extra_args=['-connect=fakeaddress1', '-dnsseed=1', '-proxy=1.2.3.4'])
+            self.restart_node(0, extra_args=['-connect=fakeaddress1', '-dnsseed=1', UNREACHABLE_PROXY_ARG])
 
         # If the user did not disable -dnsseed, but it was soft-disabled because they provided -connect,
         # they shouldn't see a warning about -dnsseed being ignored.
         with self.nodes[0].assert_debug_log(expected_msgs=addcon_thread_started,
                 unexpected_msgs=dnsseed_ignored):
-            self.restart_node(0, extra_args=['-connect=fakeaddress1', '-proxy=1.2.3.4'])
+            self.restart_node(0, extra_args=['-connect=fakeaddress1', UNREACHABLE_PROXY_ARG])
 
         # We have to supply expected_msgs as it's a required argument
         # The expected_msg must be something we are confident will be logged after the unexpected_msg
@@ -391,6 +396,19 @@ class ConfArgsTest(BitcoinTestFramework):
             with self.nodes[0].assert_debug_log(expected_msgs=addcon_thread_started,
                     unexpected_msgs=seednode_ignored):
                 self.restart_node(0, extra_args=[connect_arg, '-seednode=fakeaddress2'])
+
+            # Make sure -noconnect soft-disables -listen and -dnsseed.
+            # Need to temporarily remove these settings from the config file in
+            # order for the two log messages to appear
+            self.nodes[0].replace_in_config([("bind=", "#bind="), ("dnsseed=", "#dnsseed=")])
+            with self.nodes[0].assert_debug_log(expected_msgs=[dnsseed_disabled, listen_disabled]):
+                self.restart_node(0, extra_args=[connect_arg])
+            self.nodes[0].replace_in_config([("#bind=", "bind="), ("#dnsseed=", "dnsseed=")])
+
+            # Make sure -proxy and -noconnect warn about -dnsseed setting being
+            # ignored, just like -proxy and -connect do.
+            with self.nodes[0].assert_debug_log(expected_msgs=dnsseed_ignored):
+                self.restart_node(0, extra_args=[connect_arg, '-dnsseed', '-proxy=localhost:1080'])
         self.stop_node(0)
 
     def test_ignored_conf(self):
@@ -454,32 +472,21 @@ class ConfArgsTest(BitcoinTestFramework):
         self.log.info("Test testnet3 deprecation warning")
         t3_warning_log = "Warning: Support for testnet3 is deprecated and will be removed in an upcoming release. Consider switching to testnet4."
 
-        def warning_msg(node, approx_size):
-            return f'Warning: Disk space for "{node.datadir_path / node.chain / "blocks" }" may not accommodate the block files. Approximately {approx_size} GB of data will be stored in this directory.'
-
-        # Testnet3 node will log the warning
+        self.log.debug("Testnet3 node will log the deprecation warning")
         self.nodes[0].chain = 'testnet3'
         self.nodes[0].replace_in_config([('regtest=', 'testnet='), ('[regtest]', '[test]')])
         with self.nodes[0].assert_debug_log([t3_warning_log]):
             self.start_node(0)
-        # Some CI environments will have limited space and some others won't
-        # so we need to handle both cases as a valid result.
-        self.nodes[0].stderr.seek(0)
-        err = self.nodes[0].stdout.read()
-        self.nodes[0].stderr.seek(0)
-        self.nodes[0].stderr.truncate()
-        if err != b'' and err != warning_msg(self.nodes[0], 42):
-            raise AssertionError("Unexpected stderr after shutdown of Testnet3 node")
         self.stop_node(0)
 
-        # Testnet4 node will not log the warning
+        self.log.debug("Testnet4 node will not log the deprecation warning")
         self.nodes[0].chain = 'testnet4'
         self.nodes[0].replace_in_config([('testnet=', 'testnet4='), ('[test]', '[testnet4]')])
         with self.nodes[0].assert_debug_log([], unexpected_msgs=[t3_warning_log]):
             self.start_node(0)
         self.stop_node(0)
 
-        # Reset to regtest
+        self.log.debug("Reset to regtest")
         self.nodes[0].chain = 'regtest'
         self.nodes[0].replace_in_config([('testnet4=', 'regtest='), ('[testnet4]', '[regtest]')])
 
@@ -515,9 +522,9 @@ class ConfArgsTest(BitcoinTestFramework):
         conf_file = default_data_dir / "bitcoin.conf"
 
         # datadir needs to be set before [chain] section
-        with open(conf_file, encoding='utf8') as f:
+        with open(conf_file) as f:
             conf_file_contents = f.read()
-        with open(conf_file, 'w', encoding='utf8') as f:
+        with open(conf_file, 'w') as f:
             f.write(f"datadir={new_data_dir}\n")
             f.write(conf_file_contents)
 

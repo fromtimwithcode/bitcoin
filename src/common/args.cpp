@@ -1,5 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
-// Copyright (c) 2009-2022 The Bitcoin Core developers
+// Copyright (c) 2009-present The Bitcoin Core developers
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -19,9 +19,7 @@
 #include <util/string.h>
 
 #ifdef WIN32
-#include <codecvt>    /* for codecvt_utf8_utf16 */
-#include <shellapi.h> /* for CommandLineToArgvW */
-#include <shlobj.h>   /* for CSIDL_APPDATA */
+#include <shlobj.h>
 #endif
 
 #include <algorithm>
@@ -85,7 +83,7 @@ KeyInfo InterpretKey(std::string key)
         result.section = key.substr(0, option_index);
         key.erase(0, option_index + 1);
     }
-    if (key.substr(0, 2) == "no") {
+    if (key.starts_with("no")) {
         key.erase(0, 2);
         result.negated = true;
     }
@@ -115,7 +113,7 @@ std::optional<common::SettingsValue> InterpretValue(const KeyInfo& key, const st
         }
         // Double negatives like -nofoo=0 are supported (but discouraged)
         if (value && !InterpretBool(*value)) {
-            LogPrintf("Warning: parsed potentially confusing double-negative -%s=%s\n", key.name, *value);
+            LogWarning("Parsed potentially confusing double-negative -%s=%s", key.name, *value);
             return true;
         }
         return false;
@@ -189,7 +187,7 @@ bool ArgsManager::ParseParameters(int argc, const char* const argv[], std::strin
         // internet" warning, and clicks the Open button, macOS passes
         // a unique process serial number (PSN) as -psn_... command-line
         // argument, which we filter out.
-        if (key.substr(0, 5) == "-psn_") continue;
+        if (key.starts_with("-psn_")) continue;
 #endif
 
         if (key == "-") break; //bitcoin-tx using stdin
@@ -266,7 +264,13 @@ std::optional<unsigned int> ArgsManager::GetArgFlags(const std::string& name) co
             return search->second.m_flags;
         }
     }
-    return std::nullopt;
+    return m_default_flags;
+}
+
+void ArgsManager::SetDefaultFlags(std::optional<unsigned int> flags)
+{
+    LOCK(cs_args);
+    m_default_flags = flags;
 }
 
 fs::path ArgsManager::GetPathArg(std::string arg, const fs::path& default_value) const
@@ -394,7 +398,7 @@ static void SaveErrors(const std::vector<std::string> errors, std::vector<std::s
         if (error_out) {
             error_out->emplace_back(error);
         } else {
-            LogPrintf("%s\n", error);
+            LogWarning("%s", error);
         }
     }
 }
@@ -416,7 +420,7 @@ bool ArgsManager::ReadSettingsFile(std::vector<std::string>* errors)
     for (const auto& setting : m_settings.rw_settings) {
         KeyInfo key = InterpretKey(setting.first); // Split setting key into section and argname
         if (!GetArgFlags('-' + key.name)) {
-            LogPrintf("Ignoring unknown rw_settings value %s\n", setting.first);
+            LogWarning("Ignoring unknown rw_settings value %s", setting.first);
         }
     }
     return true;
@@ -589,6 +593,14 @@ void ArgsManager::AddHiddenArgs(const std::vector<std::string>& names)
     }
 }
 
+void ArgsManager::ClearArgs()
+{
+    LOCK(cs_args);
+    m_settings = {};
+    m_available_args.clear();
+    m_network_only_args.clear();
+}
+
 void ArgsManager::CheckMultipleCLIArgs() const
 {
     LOCK(cs_args);
@@ -709,6 +721,7 @@ std::string HelpMessageOpt(const std::string &option, const std::string &message
 
 const std::vector<std::string> TEST_OPTIONS_DOC{
     "addrman (use deterministic addrman)",
+    "reindex_after_failure_noninteractive_yes (When asked for a reindex after failure interactively, simulate as-if answered with 'yes')",
     "bip94 (enforce BIP94 consensus rules)",
 };
 
@@ -847,7 +860,7 @@ void ArgsManager::logArgsPrefix(
             std::optional<unsigned int> flags = GetArgFlags('-' + arg.first);
             if (flags) {
                 std::string value_str = (*flags & SENSITIVE) ? "****" : value.write();
-                LogPrintf("%s %s%s=%s\n", prefix, section_str, arg.first, value_str);
+                LogInfo("%s %s%s=%s\n", prefix, section_str, arg.first, value_str);
             }
         }
     }
@@ -860,34 +873,7 @@ void ArgsManager::LogArgs() const
         logArgsPrefix("Config file arg:", section.first, section.second);
     }
     for (const auto& setting : m_settings.rw_settings) {
-        LogPrintf("Setting file arg: %s = %s\n", setting.first, setting.second.write());
+        LogInfo("Setting file arg: %s = %s\n", setting.first, setting.second.write());
     }
     logArgsPrefix("Command-line arg:", "", m_settings.command_line_options);
 }
-
-namespace common {
-#ifdef WIN32
-WinCmdLineArgs::WinCmdLineArgs()
-{
-    wchar_t** wargv = CommandLineToArgvW(GetCommandLineW(), &argc);
-    std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>, wchar_t> utf8_cvt;
-    argv = new char*[argc];
-    args.resize(argc);
-    for (int i = 0; i < argc; i++) {
-        args[i] = utf8_cvt.to_bytes(wargv[i]);
-        argv[i] = &*args[i].begin();
-    }
-    LocalFree(wargv);
-}
-
-WinCmdLineArgs::~WinCmdLineArgs()
-{
-    delete[] argv;
-}
-
-std::pair<int, char**> WinCmdLineArgs::get()
-{
-    return std::make_pair(argc, argv);
-}
-#endif
-} // namespace common

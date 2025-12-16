@@ -29,7 +29,7 @@ static void AddTx(const CTransactionRef& tx, CTxMemPool& pool) EXCLUSIVE_LOCKS_R
     unsigned int sigOpCost{4};
     uint64_t fee{0};
     LockPoints lp;
-    AddToMempool(pool, CTxMemPoolEntry(
+    TryAddToMempool(pool, CTxMemPoolEntry(TxGraph::Ref(),
         tx, fee, nTime, nHeight, sequence,
         spendsCoinbase, sigOpCost, lp));
 }
@@ -75,11 +75,11 @@ static void MempoolCheckEphemeralSpends(benchmark::Bench& bench)
     uint32_t iteration{0};
 
     TxValidationState dummy_state;
-    Txid dummy_txid;
+    Wtxid dummy_wtxid;
 
     bench.run([&]() NO_THREAD_SAFETY_ANALYSIS {
 
-        CheckEphemeralSpends({tx2_r}, /*dust_relay_rate=*/CFeeRate(iteration * COIN / 10), pool, dummy_state, dummy_txid);
+        CheckEphemeralSpends({tx2_r}, /*dust_relay_rate=*/CFeeRate(iteration * COIN / 10), pool, dummy_state, dummy_wtxid);
         iteration++;
     });
 }
